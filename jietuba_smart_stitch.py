@@ -4,16 +4,22 @@ jietuba_smart_stitch.py - 智能图片拼接模块
 使用ORB特征点匹配 + RANSAC，自动识别重叠区域并智能拼接
 这是专业图像拼接软件的标准方法（Photoshop、Hugin等都用这个）
 
-最新优化版本 - 2025-10-27 重复过滤升级版
+最新优化版本 - 2025-10-29 Y轴几何约束升级版
 ================================
 
-🎯 新增功能:
+🎯 新增功能 (2025-10-29):
+  ⭐ Y轴几何约束验证
+     - 检测规则：Y轴偏移不应为负数（长截图向下滚动，不会向上）
+     - 异常检测：当median_offset < -10px时，自动触发备选方案
+     - 多策略重试：标准搜索 → 扩大搜索 → 全图搜索 → 模板匹配
+     - 提高准确性：避免误检测导致的错误拼接
+
   ⭐ 自动过滤重复图片
      - 检测规则：如果图i与图i+1的重复率>60%，且图i与图i+2的重复率>20%，则跳过图i+1
      - 应用场景：网页滚动截图时的重复帧、动态广告导致的重复内容
      - 提高拼接质量，减少冗余内容
 
-  ⭐ 两两配对拼接策略 (pairwise) - 推荐
+  ⭐ 两两配对拼接策略 (pairwise) - 
      - 分治法：每轮将相邻图片两两配对拼接
      - 优势：图片大小相近，特征点分布均衡，减少累积误差
      - 示例：8张图 → 4张 → 2张 → 1张
@@ -24,6 +30,8 @@ jietuba_smart_stitch.py - 智能图片拼接模块
 
 核心算法:
   ✅ ORB特征点匹配 - 快速、鲁棒
+  ✅ Y轴几何约束 - 🆕 防止负数偏移的误检测
+  ✅ 多策略重试机制 - 🆕 自动扩大搜索范围
   ✅ 重复图片检测 - 自动过滤冗余帧
   ✅ 自适应特征检测 - 根据纹理丰富度自动调整策略
   ✅ MAD-based RANSAC - 更鲁棒的异常值过滤
@@ -32,6 +40,8 @@ jietuba_smart_stitch.py - 智能图片拼接模块
   ✅ 模板匹配后备 - 特征点失败时自动降级
 
 优化点:
+  🚀 Y轴约束: 🆕 检测负数偏移，自动重试更大范围
+  🚀 多策略搜索: 🆕 标准 → 扩大 → 全图 → 模板匹配
   🚀 重复过滤: 智能检测并移除重复图片
   🚀 特征点数量: 1500 → 2000
   🚀 纹理检测: 自动识别低纹理区域
@@ -241,7 +251,9 @@ def find_overlap_region(img1: np.ndarray, img2: np.ndarray,
     """
     使用ORB特征点匹配找到两张图片的重叠区域
     
-    优化版本:
+    优化版本 (2025-10-29 升级):
+    - 🆕 Y轴几何约束验证 (Y偏移不应为负数)
+    - 🆕 异常检测 + 自动重试机制 (扩大搜索区域)
     - 多尺度特征检测(提高鲁棒性)
     - 几何约束(X轴偏移应接近0)
     - 改进的RANSAC异常值过滤
@@ -257,19 +269,314 @@ def find_overlap_region(img1: np.ndarray, img2: np.ndarray,
     Returns:
         (offset_y, confidence): Y轴偏移量和置信度
     """
+    # 🆕 尝试多种搜索策略
+    strategies = [
+        {'name': '标准策略', 'search_ratio_multiplier': 2.0, 'use_full_height': False},
+        {'name': '扩大搜索', 'search_ratio_multiplier': 3.0, 'use_full_height': False},
+        {'name': '全图搜索', 'search_ratio_multiplier': 1.0, 'use_full_height': True},
+    ]
+    
+    for strategy_idx, strategy in enumerate(strategies):
+        try:
+            result = _try_find_overlap(
+                img1, img2, overlap_ratio, min_match_count, 
+                strategy, strategy_idx
+            )
+            
+            if result is not None:
+                offset_y, confidence, y_median_offset = result
+                
+                # 🆕 验证Y偏移合理性 (不应为负数，除非误差很小)
+                if y_median_offset < -10:
+                    print(f"   ⚠️ Y偏移异常 (median={y_median_offset:.1f}px < -10px)，尝试下一个策略...")
+                    if strategy_idx < len(strategies) - 1:
+                        continue  # 尝试下一个策略
+                    else:
+                        print(f"   ⚠️ 所有策略均失败，降级到模板匹配")
+                        return _template_matching_fallback(img1, img2, overlap_ratio)
+                
+                # Y偏移合理，返回结果
+                return offset_y, confidence
+            
+            # 当前策略失败，尝试下一个
+            if strategy_idx < len(strategies) - 1:
+                print(f"   ⚠️ {strategy['name']}失败，尝试下一个策略...")
+                continue
+        
+        except Exception as e:
+            print(f"   ❌ {strategy['name']}出错: {e}")
+            if strategy_idx < len(strategies) - 1:
+                continue
+    
+    # 所有策略都失败，使用模板匹配
+    print(f"   ⚠️ 所有特征匹配策略失败，降级到模板匹配")
+    return _template_matching_fallback(img1, img2, overlap_ratio)
+
+
+def _try_find_overlap(img1: np.ndarray, img2: np.ndarray,
+                     overlap_ratio: float,
+                     min_match_count: int,
+                     strategy: dict,
+                     strategy_idx: int) -> Optional[Tuple[int, float, float]]:
+    """
+    尝试使用指定策略查找重叠区域
+    
+    Returns:
+        (offset_y, confidence, y_median_offset) 或 None
+    """
     try:
         h1, w1 = img1.shape[:2]
         h2, w2 = img2.shape[:2]
         
-        print(f"\n🔍 特征点匹配: img1={h1}x{w1}, img2={h2}x{w2}")
+        if strategy_idx == 0:
+            print(f"\n🔍 特征点匹配: img1={h1}x{w1}, img2={h2}x{w2}")
+        print(f"   策略: {strategy['name']}")
         
-        # 1. 提取搜索区域（优化性能）
-        search_ratio = max(0.5, overlap_ratio * 2)  # 搜索范围是预估的2倍
-        search_height1 = int(h1 * search_ratio)
-        search_height2 = int(h2 * search_ratio)
+        # 1. 根据策略提取搜索区域
+        if strategy['use_full_height']:
+            # 全图搜索
+            region1 = img1
+            region2 = img2
+            region1_start = 0
+        else:
+            # 部分搜索
+            search_ratio = max(0.5, overlap_ratio * strategy['search_ratio_multiplier'])
+            search_height1 = int(h1 * search_ratio)
+            search_height2 = int(h2 * search_ratio)
+            
+            region1 = img1[-search_height1:, :]  # img1的下半部分
+            region2 = img2[:search_height2, :]   # img2的上半部分
+            region1_start = h1 - search_height1
         
-        region1 = img1[-search_height1:, :]  # img1的下半部分
-        region2 = img2[:search_height2, :]   # img2的上半部分
+        # 转换为灰度图
+        if len(region1.shape) == 3:
+            gray1 = cv2.cvtColor(region1, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(region2, cv2.COLOR_BGR2GRAY)
+        else:
+            gray1 = region1
+            gray2 = region2
+        
+        print(f"   搜索区域: region1={gray1.shape}, region2={gray2.shape}")
+        
+        # 2. 自适应特征检测(根据纹理丰富度选择策略)
+        kp1, des1, kp2, des2, method = _adaptive_feature_detection(
+            gray1, gray2, base_nfeatures=2000
+        )
+        
+        if des1 is None or des2 is None or len(kp1) < min_match_count:
+            print(f"   ❌ 特征点不足: img1={len(kp1) if kp1 else 0}, img2={len(kp2) if kp2 else 0}")
+            return None
+        
+        print(f"   特征点({method}): img1={len(kp1)}, img2={len(kp2)}")
+        
+        # 3. 特征匹配（BFMatcher）
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        
+        try:
+            matches = bf.knnMatch(des1, des2, k=2)
+        except cv2.error as e:
+            print(f"   ❌ 匹配失败: {e}")
+            return None
+        
+        # 4. Lowe's ratio test 筛选好的匹配
+        good_matches = []
+        for match_pair in matches:
+            if len(match_pair) == 2:
+                m, n = match_pair
+                if m.distance < 0.75 * n.distance:  # Lowe推荐的阈值
+                    good_matches.append(m)
+        
+        print(f"   匹配: 总数={len(matches)}, 优质={len(good_matches)}")
+        
+        if len(good_matches) < min_match_count:
+            print(f"   ⚠️ 优质匹配过少 ({len(good_matches)} < {min_match_count})")
+            return None
+        
+        # 5. 提取匹配点坐标
+        pts1 = np.float32([kp1[m.queryIdx].pt for m in good_matches])
+        pts2 = np.float32([kp2[m.trainIdx].pt for m in good_matches])
+        
+        # 🆕 6. 几何约束验证 - 垂直拼接时X轴偏移应接近0
+        x_offsets = pts1[:, 0] - pts2[:, 0]
+        x_median = np.median(x_offsets)
+        x_std = np.std(x_offsets)
+        
+        # 过滤X轴偏移异常的点(超过3倍标准差)
+        x_inliers_mask = np.abs(x_offsets - x_median) < 3 * max(x_std, 5)
+        
+        if np.sum(x_inliers_mask) < min_match_count:
+            print(f"   ⚠️ X轴约束过滤后匹配点不足: {np.sum(x_inliers_mask)}")
+            x_penalty = 0.5
+        else:
+            # 应用X轴过滤
+            pts1 = pts1[x_inliers_mask]
+            pts2 = pts2[x_inliers_mask]
+            good_matches = [m for i, m in enumerate(good_matches) if x_inliers_mask[i]]
+            x_penalty = 1.0
+            print(f"   ✅ X轴约束过滤: 保留 {len(good_matches)} 个匹配点 (X_median={x_median:.1f}px, X_std={x_std:.1f}px)")
+        
+        # 🆕 7. 改进的Y轴偏移计算 - 使用RANSAC思想
+        y_offsets = pts1[:, 1] - pts2[:, 1]
+        
+        # 使用改进的异常值过滤(MAD - Median Absolute Deviation)
+        if len(y_offsets) >= 4:
+            y_median = np.median(y_offsets)
+            mad = np.median(np.abs(y_offsets - y_median))
+            
+            # MAD-based 异常值检测(更鲁棒)
+            if mad > 0:
+                modified_z_scores = 0.6745 * (y_offsets - y_median) / mad
+                y_inliers_mask = np.abs(modified_z_scores) < 3.5
+            else:
+                # MAD为0说明所有点几乎一致,直接使用
+                y_inliers_mask = np.ones(len(y_offsets), dtype=bool)
+            
+            if np.sum(y_inliers_mask) >= 3:
+                y_filtered = y_offsets[y_inliers_mask]
+                median_offset = np.median(y_filtered)
+                std_offset = np.std(y_filtered)
+                inlier_ratio = np.sum(y_inliers_mask) / len(y_offsets)
+                print(f"   Y轴RANSAC: 内点比例={inlier_ratio:.1%}, 有效点={np.sum(y_inliers_mask)}/{len(y_offsets)}")
+            else:
+                # RANSAC失败,回退到四分位数
+                y_sorted = np.sort(y_offsets)
+                q1_idx = len(y_sorted) // 4
+                q3_idx = 3 * len(y_sorted) // 4
+                y_filtered = y_sorted[q1_idx:q3_idx]
+                median_offset = np.median(y_filtered)
+                std_offset = np.std(y_filtered)
+                inlier_ratio = 0.5
+                print(f"   Y轴四分位: 使用中间50%的点")
+        else:
+            median_offset = np.median(y_offsets)
+            std_offset = np.std(y_offsets)
+            inlier_ratio = 1.0
+        
+        print(f"   Y轴偏移: median={median_offset:.1f}px, std={std_offset:.1f}px")
+        
+        # 🆕 8. 计算实际offset_y（从img1顶部算起）
+        offset_y = int(region1_start + median_offset)
+        
+        # 🆕 9. 改进的置信度计算（多维度综合评估）
+        # 9.1 匹配数量置信度
+        num_confidence = min(len(good_matches) / 50.0, 1.0)
+        
+        # 9.2 稳定性置信度(标准差)
+        std_confidence = max(0, 1.0 - std_offset / 50.0)
+        
+        # 9.3 匹配距离置信度
+        avg_distance = np.mean([m.distance for m in good_matches])
+        dist_confidence = max(0, 1.0 - avg_distance / 100.0)
+        
+        # 🆕 9.4 内点比例置信度
+        inlier_confidence = inlier_ratio
+        
+        # 🆕 9.5 X轴约束置信度
+        x_constraint_confidence = 1.0 if abs(x_median) < 10 and x_std < 5 else max(0, 1.0 - abs(x_median) / 50.0)
+        
+        # 🆕 9.6 空间分布置信度(匹配点应均匀分布,避免聚集)
+        if len(good_matches) >= 10:
+            pts1_y = pts1[:, 1]
+            y_range = np.max(pts1_y) - np.min(pts1_y)
+            y_coverage = y_range / gray1.shape[0] if gray1.shape[0] > 0 else 0
+            spatial_confidence = min(y_coverage / 0.3, 1.0)  # 期望覆盖至少30%的区域
+        else:
+            spatial_confidence = 0.5
+        
+        # 综合置信度(加权平均)
+        confidence = (
+            num_confidence * 0.25 +          # 匹配数量 25%
+            std_confidence * 0.25 +          # 稳定性 25%
+            dist_confidence * 0.15 +         # 距离 15%
+            inlier_confidence * 0.15 +       # 内点比例 15%
+            x_constraint_confidence * 0.10 + # X轴约束 10%
+            spatial_confidence * 0.10        # 空间分布 10%
+        )
+        
+        confidence *= x_penalty  # 应用X轴约束惩罚
+        
+        print(f"   置信度: {confidence:.3f}")
+        print(f"      匹配={num_confidence:.2f}, 稳定={std_confidence:.2f}, 距离={dist_confidence:.2f}")
+        print(f"      内点={inlier_confidence:.2f}, X约束={x_constraint_confidence:.2f}, 分布={spatial_confidence:.2f}")
+        
+        # 10. 验证合理性（改进的逻辑）
+        overlap_height = h1 - offset_y
+        
+        # 10.1 基本合理性检查
+        if overlap_height <= 0:
+            print(f"   ❌ 无重叠 (overlap={overlap_height}px)")
+            confidence *= 0.2
+            return offset_y, confidence, median_offset
+        
+        if overlap_height >= h2:
+            # 特殊情况：img2完全在img1范围内（最后一次很小的滚动）
+            # 这是合理的！计算真实的重叠比例
+            overlap_ratio_to_img2 = overlap_height / h2
+            
+            if overlap_ratio_to_img2 > 1.0:
+                # img2完全包含在重叠区域内
+                actual_new_height = offset_y + h2
+                
+                # 检查特征匹配的质量
+                if len(good_matches) >= 50 and std_offset < 10:
+                    # 特征匹配质量很好，相信这个结果
+                    print(f"   ✅ 小滚动检测: offset_y={offset_y}, img2完全在重叠区域内")
+                    print(f"      img2高度={h2}px, 重叠={overlap_height}px, 新增={h2-overlap_height}px")
+                    # 不惩罚置信度
+                    return offset_y, confidence, median_offset
+                else:
+                    print(f"   ⚠️ 重叠异常: {overlap_height}px >= img2高度 {h2}px，且匹配质量不足")
+                    confidence *= 0.3
+                    return offset_y, confidence, median_offset
+        
+        # 10.2 正常情况：计算重叠比例
+        # 使用img2高度作为基准（更合理）
+        overlap_ratio_to_img2 = overlap_height / h2
+        
+        if overlap_ratio_to_img2 < 0.05:
+            # 重叠太少（<5%）
+            print(f"   ⚠️ 重叠过少: {overlap_height}px ({overlap_ratio_to_img2:.1%})")
+            confidence *= 0.7  # 轻微惩罚
+        elif overlap_ratio_to_img2 > 0.95:
+            # 重叠很大（>95%），但如果特征匹配好，可能是小滚动
+            if len(good_matches) >= 30 and std_offset < 5:
+                print(f"   ✅ 小滚动: offset_y={offset_y}, 重叠={overlap_height}px ({overlap_ratio_to_img2:.1%})")
+                # 不惩罚
+            else:
+                print(f"   ⚠️ 重叠过大: {overlap_height}px ({overlap_ratio_to_img2:.1%})")
+                confidence *= 0.6
+        else:
+            # 正常范围（5%-95%）
+            print(f"   ✅ 重叠合理: offset_y={offset_y}, 高度={overlap_height}px ({overlap_ratio_to_img2:.1%})")
+        
+        return offset_y, confidence, median_offset
+        
+    except Exception as e:
+        print(f"   ❌ 特征匹配异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+        
+        if strategy_idx == 0:
+            print(f"\n🔍 特征点匹配: img1={h1}x{w1}, img2={h2}x{w2}")
+        print(f"   策略: {strategy['name']}")
+        
+        # 1. 根据策略提取搜索区域
+        if strategy['use_full_height']:
+            # 全图搜索
+            region1 = img1
+            region2 = img2
+            region1_start = 0
+        else:
+            # 部分搜索
+            search_ratio = max(0.5, overlap_ratio * strategy['search_ratio_multiplier'])
+            search_height1 = int(h1 * search_ratio)
+            search_height2 = int(h2 * search_ratio)
+            
+            region1 = img1[-search_height1:, :]  # img1的下半部分
+            region2 = img2[:search_height2, :]   # img2的上半部分
+            region1_start = h1 - search_height1
         
         # 转换为灰度图
         if len(region1.shape) == 3:
@@ -539,7 +846,8 @@ def _pairwise_stitch_recursive(images: List[np.ndarray],
             
             if offset_y is not None and confidence >= min_confidence:
                 overlap_pixels = h1 - offset_y
-                if overlap_pixels > 0 and offset_y + h2 > h1:
+                # 修复: 使用 >= 而不是 >，允许完全重叠的情况
+                if overlap_pixels > 0 and offset_y + h2 >= h1:
                     # 智能拼接
                     print(f"{indent}      ✅ 智能拼接: overlap={overlap_pixels}px, conf={confidence:.3f}")
                     result = _blend_stitch(img1, img2, offset_y, overlap_pixels, blend)
@@ -611,20 +919,24 @@ def _calculate_overlap_ratio(img1: np.ndarray, img2: np.ndarray,
 
 def _filter_duplicate_images(cv2_images: List[np.ndarray], 
                              high_threshold: float = 0.6,
-                             low_threshold: float = 0.2) -> List[np.ndarray]:
+                             low_threshold: float = 0.2,
+                             identical_threshold: float = 0.95) -> List[np.ndarray]:
     """
-    过滤重复的图片（改进版）
+    过滤重复的图片（改进版 - 支持完全重复检测，包括最后一张）
     
     规则：
-      1. 如果图i与图i+1的重复率>60%，且图i与图i+2的重复率>20%，
+      1. 标准跳过：如果图i与图i+1的重复率>60%，且图i与图i+2的重复率>20%，
          则跳过图i+1（认为图i+1是重复的中间帧）
-      2. 不允许连续跳过2张图片
-      3. 过滤后至少保留2张图片（否则无法拼接）
+      2. 完全重复跳过：如果图i与图i+1的重复率>95%（完全重复），则允许连续跳过
+      3. 最后一张特殊处理：如果最后一张与倒数第二张完全重复（>95%），也会被跳过
+      4. 不允许连续跳过2张图片（除非是完全重复）
+      5. 过滤后至少保留2张图片（否则无法拼接）
     
     Args:
         cv2_images: OpenCV格式的图片列表
         high_threshold: 高重复率阈值（默认0.6，即60%）
         low_threshold: 低重复率阈值（默认0.2，即20%）
+        identical_threshold: 完全重复阈值（默认0.95，即95%）
         
     Returns:
         过滤后的图片列表
@@ -632,7 +944,7 @@ def _filter_duplicate_images(cv2_images: List[np.ndarray],
     if len(cv2_images) <= 2:
         return cv2_images
     
-    print(f"\n🔍 检测重复图片 (阈值: 连续>{high_threshold*100:.0f}% 且隔一>{low_threshold*100:.0f}%)")
+    print(f"\n🔍 检测重复图片 (阈值: 连续>{high_threshold*100:.0f}% 且隔一>{low_threshold*100:.0f}%, 完全重复>{identical_threshold*100:.0f}%)")
     
     filtered = []
     skip_indices = set()
@@ -645,21 +957,33 @@ def _filter_duplicate_images(cv2_images: List[np.ndarray],
             continue
         
         # 检查是否需要跳过下一张图
-        if i + 2 < len(cv2_images):
+        if i + 1 < len(cv2_images):
             # 计算 img[i] 和 img[i+1] 的重复率
             ratio_consecutive = _calculate_overlap_ratio(cv2_images[i], cv2_images[i+1])
             
-            # 计算 img[i] 和 img[i+2] 的重复率
-            ratio_skip_one = _calculate_overlap_ratio(cv2_images[i], cv2_images[i+2])
+            # 如果有 i+2，也计算它的重复率
+            if i + 2 < len(cv2_images):
+                ratio_skip_one = _calculate_overlap_ratio(cv2_images[i], cv2_images[i+2])
+                print(f"   图{i+1}-图{i+2}: {ratio_consecutive*100:.1f}%, 图{i+1}-图{i+3}: {ratio_skip_one*100:.1f}%", end="")
+            else:
+                # 最后两张图，只能检测连续重复
+                ratio_skip_one = 0.0
+                print(f"   图{i+1}-图{i+2}: {ratio_consecutive*100:.1f}% (最后一张)", end="")
             
-            print(f"   图{i+1}-图{i+2}: {ratio_consecutive*100:.1f}%, 图{i+1}-图{i+3}: {ratio_skip_one*100:.1f}%", end="")
+            # 🆕 检测是否为完全重复的图（一模一样）
+            is_identical = ratio_consecutive > identical_threshold
             
-            # 🆕 增加额外检查条件
-            can_skip = (
-                ratio_consecutive > high_threshold and 
-                ratio_skip_one > low_threshold and
-                not last_skipped  # 不允许连续跳过
-            )
+            # 🆕 判断是否可以跳过
+            if i + 2 < len(cv2_images):
+                # 标准情况：需要同时满足连续>60% 且隔一>20%
+                can_skip = (
+                    ratio_consecutive > high_threshold and 
+                    ratio_skip_one > low_threshold and
+                    (not last_skipped or is_identical)  # 如果是完全重复，允许连续跳过
+                )
+            else:
+                # 特殊情况：最后一张图，只需满足完全重复条件
+                can_skip = is_identical and (not last_skipped or is_identical)
             
             # 🆕 检查跳过后是否至少还有2张图片
             potential_remaining = len(cv2_images) - len(skip_indices) - 1  # -1是因为要跳过当前的i+1
@@ -669,15 +993,23 @@ def _filter_duplicate_images(cv2_images: List[np.ndarray],
             
             # 判断是否满足跳过条件
             if can_skip:
-                print(f" → ❌ 跳过图{i+2}（重复）")
+                if is_identical:
+                    print(f" → ❌ 跳过图{i+2}（完全重复）")
+                else:
+                    print(f" → ❌ 跳过图{i+2}（重复）")
                 skip_indices.add(i + 1)
                 filtered.append(cv2_images[i])
                 last_skipped = True  # 🆕 标记已跳过
                 i += 1
                 continue
             else:
-                if ratio_consecutive > high_threshold and ratio_skip_one > low_threshold:
-                    if last_skipped:
+                if ratio_consecutive > high_threshold:
+                    if i + 2 >= len(cv2_images):
+                        # 最后一张，不满足完全重复条件
+                        print(f" → ✅ 保留（最后一张，重复率{ratio_consecutive*100:.1f}%未达到完全重复阈值）")
+                    elif ratio_skip_one <= low_threshold:
+                        print(f" → ✅ 保留（隔一图重复率不足）")
+                    elif last_skipped and not is_identical:
                         print(f" → ⚠️ 保留（不允许连续跳过）")
                     else:
                         print(f" → ✅ 保留")
@@ -706,7 +1038,8 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
                          strategy: str = 'pairwise',
                          filter_duplicates: bool = True,
                          duplicate_high_threshold: float = 0.6,
-                         duplicate_low_threshold: float = 0.2) -> Image.Image:
+                         duplicate_low_threshold: float = 0.2,
+                         duplicate_identical_threshold: float = 0.95) -> Image.Image:
     """
     智能垂直拼接图片，使用特征点匹配自动识别重叠区域
     
@@ -721,6 +1054,7 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
         filter_duplicates: 是否过滤重复图片（默认True）
         duplicate_high_threshold: 连续两图的高重复率阈值（默认0.6，即60%）
         duplicate_low_threshold: 隔一图的低重复率阈值（默认0.2，即20%）
+        duplicate_identical_threshold: 完全重复阈值（默认0.95，即95%，允许连续跳过）
         
     Returns:
         拼接后的PIL Image
@@ -751,7 +1085,7 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
     print(f"   策略: {strategy.upper()}")
     print(f"   参数: min_confidence={min_confidence}, blend={blend}")
     if filter_duplicates:
-        print(f"   重复过滤: 启用 (连续>{duplicate_high_threshold*100:.0f}% 且隔一>{duplicate_low_threshold*100:.0f}%)")
+        print(f"   重复过滤: 启用 (连续>{duplicate_high_threshold*100:.0f}% 且隔一>{duplicate_low_threshold*100:.0f}%, 完全重复>{duplicate_identical_threshold*100:.0f}%)")
     print(f"{'='*60}")
     
     # 转换所有图片为OpenCV格式
@@ -774,7 +1108,8 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
         cv2_images = _filter_duplicate_images(
             cv2_images, 
             high_threshold=duplicate_high_threshold,
-            low_threshold=duplicate_low_threshold
+            low_threshold=duplicate_low_threshold,
+            identical_threshold=duplicate_identical_threshold
         )
         
         # 如果过滤后只剩一张图，直接返回
@@ -868,8 +1203,9 @@ def _sequential_stitch(cv2_images: List[np.ndarray],
             
             new_height = offset_y + h2
             
-            if new_height <= h1:
-                print(f"   ⚠️ 新高度异常 ({new_height} <= {h1})，降级为简单拼接")
+            # 修复: 使用 < 而不是 <=，允许 new_height == h1 的情况（完全重叠）
+            if new_height < h1:
+                print(f"   ⚠️ 新高度异常 ({new_height} < {h1})，降级为简单拼接")
                 fallback_count += 1
                 result = _simple_append(result, img2)
                 continue
@@ -1048,7 +1384,8 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
                strategy: str = 'pairwise',
                filter_duplicates: bool = True,
                duplicate_high_threshold: float = 0.6,
-               duplicate_low_threshold: float = 0.2) -> Image.Image:
+               duplicate_low_threshold: float = 0.2,
+               duplicate_identical_threshold: float = 0.95) -> Image.Image:
     """
     自动拼接图片（智能或简单模式）
     
@@ -1058,7 +1395,7 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
       - 置信度默认降低到0.5（特征匹配更可靠）
       - 新增两两配对拼接策略（默认）
       - 自动降级策略：特征匹配 → 简单拼接
-      - 新增重复图片过滤功能
+      - 新增重复图片过滤功能（支持完全重复连续跳过）
     
     Args:
         images: 图片列表（可以是PIL Image、numpy数组或文件路径）
@@ -1071,6 +1408,7 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
         filter_duplicates: 是否过滤重复图片（默认True）
         duplicate_high_threshold: 连续两图的高重复率阈值（默认0.6，即60%）
         duplicate_low_threshold: 隔一图的低重复率阈值（默认0.2，即20%）
+        duplicate_identical_threshold: 完全重复阈值（默认0.95，即95%，允许连续跳过）
         
     Returns:
         拼接后的PIL Image
@@ -1096,7 +1434,8 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
                 strategy=strategy,
                 filter_duplicates=filter_duplicates,
                 duplicate_high_threshold=duplicate_high_threshold,
-                duplicate_low_threshold=duplicate_low_threshold
+                duplicate_low_threshold=duplicate_low_threshold,
+                duplicate_identical_threshold=duplicate_identical_threshold
             )
         except Exception as e:
             print(f"⚠️ 智能拼接失败: {e}")
@@ -1108,10 +1447,20 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
 
 if __name__ == "__main__":
     print("="*60)
-    print("智能拼接模块 (2025-10-27 重复过滤升级版)")
+    print("智能拼接模块 (2025-10-29 Y轴几何约束升级版)")
     print("="*60)
-    print("算法: ORB特征点匹配 + RANSAC + 重复过滤")
-    print("\n🎯 新功能: 自动过滤重复图片")
+    print("算法: ORB特征点匹配 + RANSAC + Y轴约束 + 重复过滤")
+    print("\n🎯 新功能 (2025-10-29): Y轴几何约束验证")
+    print("="*60)
+    print("\nY轴约束规则:")
+    print("   - 垂直长截图向下滚动，Y偏移应为正数")
+    print("   - 当检测到 median_offset < -10px 时，认为异常")
+    print("   - 自动启用备选策略:")
+    print("     1️⃣ 标准策略: 搜索范围 = 预估重叠 × 2")
+    print("     2️⃣ 扩大搜索: 搜索范围 = 预估重叠 × 3")
+    print("     3️⃣ 全图搜索: 使用完整图片进行匹配")
+    print("     4️⃣ 模板匹配: 最后的后备方案")
+    print("\n🎯 重复过滤功能:")
     print("="*60)
     print("\n重复过滤规则:")
     print("   如果图i与图i+1的重复率>60%，")
@@ -1142,7 +1491,7 @@ if __name__ == "__main__":
     print("     ...")
     print("="*60)
     print("\n使用方法:")
-    print("\n# 推荐: 两两配对拼接 + 重复过滤")
+    print("\n# 推荐: 两两配对拼接 + Y轴约束 + 重复过滤")
     print("from jietuba_smart_stitch import auto_stitch")
     print("result = auto_stitch(")
     print("    images, ")
@@ -1152,8 +1501,7 @@ if __name__ == "__main__":
     print("    duplicate_high_threshold=0.6,  # 连续图重复率>60%")
     print("    duplicate_low_threshold=0.2    # 隔一图重复率>20%")
     print(")")
-    print("\n# 传统: 顺序累积拼接")
-    print("result = auto_stitch(images, mode='smart', strategy='sequential')")
+    print("# Y轴约束会自动启用，无需额外配置！")
     print("\n# 传统: 顺序累积拼接")
     print("result = auto_stitch(images, mode='smart', strategy='sequential')")
     print("\n# 直接调用")
@@ -1166,5 +1514,3 @@ if __name__ == "__main__":
     print("    strategy='pairwise'  # 或 'sequential'")
     print(")")
     print("="*60)
-
-
