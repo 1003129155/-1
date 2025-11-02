@@ -367,6 +367,37 @@ class SettingsDialog(QDialog):
         group_layout.addWidget(self.smart_selection_checkbox)
         group_layout.addWidget(description)
         
+        # 任务栏按钮功能
+        self.taskbar_button_checkbox = QCheckBox("タスクバーにスクリーンショットボタンを表示")
+        self.taskbar_button_checkbox.setChecked(self.config_manager.get_taskbar_button())
+        self.taskbar_button_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #333;
+                font-size: 10pt;
+                padding: 5px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #ddd;
+                background-color: white;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #4CAF50;
+                background-color: #4CAF50;
+                border-radius: 3px;
+            }
+        """)
+        
+        taskbar_description = QLabel("※ タスクバーにスクリーンショットボタンを固定表示します。\n   クリックするとスクリーンショットが起動します。")
+        taskbar_description.setStyleSheet("color: #666; font-size: 9pt; margin-left: 25px;")
+        
+        group_layout.addWidget(self.taskbar_button_checkbox)
+        group_layout.addWidget(taskbar_description)
+        
         return group
 
     def get_hotkey(self):
@@ -378,6 +409,11 @@ class SettingsDialog(QDialog):
         # 保存智能选择设置
         self.config_manager.set_smart_selection(self.smart_selection_checkbox.isChecked())
         print(f"💾 智能选择设置已保存: {self.smart_selection_checkbox.isChecked()}")
+        
+        # 保存任务栏按钮设置
+        self.config_manager.set_taskbar_button(self.taskbar_button_checkbox.isChecked())
+        print(f"💾 任务栏按钮设置已保存: {self.taskbar_button_checkbox.isChecked()}")
+        
         super().accept()
 
     def keyPressEvent(self, event):
@@ -390,6 +426,90 @@ class SettingsDialog(QDialog):
             super().keyPressEvent(event)
 
 
+
+
+class TaskbarButton(QWidget):
+    """任务栏截图按钮窗口"""
+    clicked = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("jietuba Screenshot")
+        
+        # 设置窗口标志：工具窗口，始终在顶层
+        self.setWindowFlags(
+            Qt.Tool |  # 工具窗口，会在任务栏显示
+            Qt.WindowStaysOnTopHint |  # 始终置顶
+            Qt.FramelessWindowHint  # 无边框
+        )
+        
+        # 设置窗口大小和样式
+        self.setFixedSize(60, 60)
+        self.setup_ui()
+        
+        # 定位到屏幕左下角
+        self.position_at_taskbar()
+        
+    def setup_ui(self):
+        """设置界面"""
+        layout = QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 创建按钮
+        self.btn = QPushButton()
+        self.btn.setFixedSize(50, 50)
+        self.btn.setIcon(create_app_icon())
+        self.btn.setIconSize(self.btn.size())
+        self.btn.clicked.connect(self.clicked.emit)
+        self.btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(245, 245, 245, 200);
+                border: 2px solid #999;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: rgba(230, 230, 230, 220);
+                border: 2px solid #666;
+            }
+            QPushButton:pressed {
+                background-color: rgba(200, 200, 200, 240);
+                border: 2px solid #333;
+            }
+        """)
+        self.btn.setToolTip("左クリック: スクリーンショット開始\n右クリック: ボタン位置を移動")
+        
+        layout.addWidget(self.btn)
+        self.setLayout(layout)
+        
+        # 设置窗口背景透明
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+    def position_at_taskbar(self):
+        """定位到任务栏左侧"""
+        from PyQt5.QtWidgets import QApplication
+        screen = QApplication.primaryScreen().geometry()
+        
+        # 定位到左下角，留出任务栏空间
+        x = 10  # 距离左边10像素
+        y = screen.height() - 100  # 距离底部100像素（留出任务栏空间）
+        
+        self.move(x, y)
+    
+    def mousePressEvent(self, event):
+        """鼠标按下事件 - 右键拖动窗口"""
+        if event.button() == Qt.RightButton:
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 右键拖动窗口"""
+        if event.buttons() == Qt.RightButton and hasattr(self, 'drag_position'):
+            self.move(event.globalPos() - self.drag_position)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
 
 
 def create_app_icon():
@@ -441,6 +561,7 @@ class ConfigManager:
         self.hotkey_default = "ctrl+shift+a"
         self.right_click_close_default = True
         self.smart_selection_default = False  # 智能选择默认关闭
+        self.taskbar_button_default = False  # 任务栏按钮默认关闭
     
     def get_hotkey(self):
         return self.settings.value('hotkey/global', self.hotkey_default, type=str)
@@ -456,6 +577,14 @@ class ConfigManager:
     
     def set_smart_selection(self, enabled):
         self.settings.setValue('screenshot/smartcursor', enabled)
+    
+    def get_taskbar_button(self):
+        """获取任务栏按钮开关状态"""
+        return self.settings.value('ui/taskbar_button', self.taskbar_button_default, type=bool)
+    
+    def set_taskbar_button(self, enabled):
+        """设置任务栏按钮开关状态"""
+        self.settings.setValue('ui/taskbar_button', enabled)
     
     # 绘画工具配置管理
     def get_tool_settings(self):
@@ -526,6 +655,10 @@ class MainWindow(QMainWindow):
 
         # 设置窗口状态监控
         self._setup_window_monitor()
+        
+        # 初始化任务栏按钮
+        self.taskbar_button = None
+        self._setup_taskbar_button()
 
         # 标记程序是否真正退出
         self.really_quit = False
@@ -562,6 +695,35 @@ class MainWindow(QMainWindow):
         """初始化截图组件"""
         self.screenshot_widget = Slabel(self)
         self.screenshot_widget.close_signal.connect(self._on_screenshot_end)
+    
+    def _setup_taskbar_button(self):
+        """初始化任务栏按钮"""
+        if self.config_manager.get_taskbar_button():
+            self._show_taskbar_button()
+        else:
+            self._hide_taskbar_button()
+    
+    def _show_taskbar_button(self):
+        """显示任务栏按钮"""
+        if self.taskbar_button is None:
+            self.taskbar_button = TaskbarButton()
+            self.taskbar_button.clicked.connect(self.start_screenshot)
+            print("✅ 任务栏按钮已创建")
+        self.taskbar_button.show()
+        print("✅ 任务栏按钮已显示")
+    
+    def _hide_taskbar_button(self):
+        """隐藏任务栏按钮"""
+        if self.taskbar_button is not None:
+            self.taskbar_button.hide()
+            print("✅ 任务栏按钮已隐藏")
+    
+    def _toggle_taskbar_button(self, enabled):
+        """切换任务栏按钮显示状态"""
+        if enabled:
+            self._show_taskbar_button()
+        else:
+            self._hide_taskbar_button()
     
     def _init_hotkey_manager(self):
         """初始化快捷键管理器（Windows 原生实现）。"""
@@ -960,6 +1122,11 @@ class MainWindow(QMainWindow):
                         )
                 else:
                     print(f"🔍 [DEBUG] 快捷键未改变或为空")
+                
+                # 更新任务栏按钮状态
+                taskbar_enabled = self.config_manager.get_taskbar_button()
+                self._toggle_taskbar_button(taskbar_enabled)
+                print(f"✅ 任务栏按钮状态已更新: {taskbar_enabled}")
             else:
                 print(f"🔍 [DEBUG] 用户取消了设置")
         except Exception as e:
@@ -1083,6 +1250,16 @@ class MainWindow(QMainWindow):
                 self.window_monitor_timer.stop()
                 self.window_monitor_timer.deleteLater()
                 print("🧹 窗口监控定时器已清理")
+            
+            # 清理任务栏按钮
+            if hasattr(self, 'taskbar_button') and self.taskbar_button:
+                try:
+                    self.taskbar_button.close()
+                    self.taskbar_button.deleteLater()
+                    self.taskbar_button = None
+                    print("🧹 任务栏按钮已清理")
+                except:
+                    pass
             
             # 强制垃圾回收
             gc.collect()

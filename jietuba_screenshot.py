@@ -1969,12 +1969,10 @@ class Slabel(QLabel):  # 区域截图功能
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
                 border: 3px solid #6495ED;
-                transform: scale(1.05);
             }
             QPushButton:pressed {
                 background: rgba(65, 105, 225, 250);
                 border: 3px solid #0000FF;
-                transform: scale(0.95);
             }
         """
         
@@ -1993,12 +1991,10 @@ class Slabel(QLabel):  # 区域截图功能
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
                 border: 3px solid #6495ED;
-                transform: scale(1.05);
             }
             QPushButton:pressed {
                 background: rgba(65, 105, 225, 250);
                 border: 3px solid #0000FF;
-                transform: scale(0.95);
             }
         """
         
@@ -2017,12 +2013,10 @@ class Slabel(QLabel):  # 区域截图功能
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
                 border: 3px solid #6495ED;
-                transform: scale(1.05);
             }
             QPushButton:pressed {
                 background: rgba(178, 34, 34, 250);
                 border: 3px solid #B22222;
-                transform: scale(0.95);
             }
         """
         
@@ -2063,6 +2057,8 @@ class Slabel(QLabel):  # 区域截图功能
                     self.paint_tools_menu.move(menu_x, menu_y)
                     self.paint_tools_menu.show()
                     self.paint_tools_menu.raise_()
+                    # 控制预设按钮的显示 - 只有画笔工具时才显示
+                    self.update_preset_buttons_visibility()
                     return
                 except Exception as _e:
                     print(f"⚠️ 钉图模式显示画笔菜单失败，退回普通逻辑: {_e}")
@@ -2865,7 +2861,7 @@ class Slabel(QLabel):  # 区域截图功能
             toolbar_x, toolbar_y = self.adjust_position_to_screen(
                 toolbar_x, toolbar_y, toolbar_width, toolbar_height, pinned_screen)
             
-            print(f"钉图工具栏定位: 显示器{screen_rect}, 工具栏({toolbar_x}, {toolbar_y})")
+            # print(f"钉图工具栏定位: 显示器{screen_rect}, 工具栏({toolbar_x}, {toolbar_y})")
             self.botton_box.move(toolbar_x, toolbar_y)
     
     def is_toolbar_under_mouse(self):

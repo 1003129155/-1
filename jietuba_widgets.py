@@ -255,11 +255,9 @@ class FramelessEnterSendQTextEdit(QTextEdit):
             QPushButton:hover {
                 background-color: rgba(41, 128, 185, 0.95);
                 border: 1px solid #1f5f85;
-                transform: translateY(-1px);
             }
             QPushButton:pressed {
                 background-color: rgba(31, 95, 133, 0.95);
-                transform: translateY(0px);
             }
         """
         
@@ -296,11 +294,9 @@ class FramelessEnterSendQTextEdit(QTextEdit):
             QPushButton:hover {
                 background-color: rgba(200, 35, 51, 0.95);
                 border: 1px solid #a71e2a;
-                transform: translateY(-1px);
             }
             QPushButton:pressed {
                 background-color: rgba(167, 30, 42, 0.95);
-                transform: translateY(0px);
             }
         """
         self.close_btn.setStyleSheet(close_btn_style)
@@ -1294,7 +1290,7 @@ class PinnedPaintLayer(QLabel):
 
     def mousePressEvent(self, event):
         """将鼠标按下事件直接转发给主窗口进行绘画处理"""
-        print(f"PaintLayer鼠标按下调试: 转发给主窗口，坐标=({event.x()}, {event.y()})")
+        # print(f"PaintLayer鼠标按下调试: 转发给主窗口，坐标=({event.x()}, {event.y()})")
         
         # 检查是否有绘画工具激活
         if (self.main_window and hasattr(self.main_window, 'painter_tools') and 
@@ -1306,17 +1302,17 @@ class PinnedPaintLayer(QLabel):
             main_event._from_pinned_window = True
             main_event._pinned_window_instance = self._parent_widget  # 添加当前钉图窗口引用
             
-            print(f"PaintLayer委托调试: 调用主窗口mousePressEvent")
+            # print(f"PaintLayer委托调试: 调用主窗口mousePressEvent")
             self.main_window.mousePressEvent(main_event)
         else:
             # 没有绘画工具激活时，转发给父窗口（Freezer）处理
-            print(f"PaintLayer鼠标按下调试: 无绘画工具，转发给父窗口")
+            # print(f"PaintLayer鼠标按下调试: 无绘画工具，转发给父窗口")
             if self._parent_widget:
                 self._parent_widget.mousePressEvent(event)
             
     def mouseReleaseEvent(self, event):
         """将鼠标释放事件直接转发给主窗口进行绘画处理"""
-        print(f"PaintLayer鼠标释放调试: 转发给主窗口")
+        # print(f"PaintLayer鼠标释放调试: 转发给主窗口")
         
         # 检查是否有绘画工具激活
         if (self.main_window and hasattr(self.main_window, 'painter_tools') and 
@@ -1328,11 +1324,11 @@ class PinnedPaintLayer(QLabel):
             main_event._from_pinned_window = True
             main_event._pinned_window_instance = self._parent_widget  # 添加当前钉图窗口引用
             
-            print(f"PaintLayer委托调试: 调用主窗口mouseReleaseEvent")
+            # print(f"PaintLayer委托调试: 调用主窗口mouseReleaseEvent")
             self.main_window.mouseReleaseEvent(main_event)
         else:
             # 没有绘画工具激活时，转发给父窗口（Freezer）处理
-            print(f"PaintLayer鼠标释放调试: 无绘画工具，转发给父窗口")
+            # print(f"PaintLayer鼠标释放调试: 无绘画工具，转发给父窗口")
             if self._parent_widget:
                 self._parent_widget.mouseReleaseEvent(event)
             
@@ -3106,7 +3102,7 @@ class Freezer(QLabel):
         return changed
         
     def mousePressEvent(self, event):
-        print(f"钉图鼠标按下调试: 按钮={event.button()}")
+        # print(f"钉图鼠标按下调试: 按钮={event.button()}")
         
         # 检查是否有主窗口工具栏显示且有绘画工具激活
         has_main_window = self.main_window is not None
@@ -3125,30 +3121,30 @@ class Freezer(QLabel):
                               tools.get('ellipse_on', 0) == 1 or
                               tools.get('line_on', 0) == 1)
         
-        print(f"钉图鼠标按下调试: 主窗口={has_main_window}, 模式={is_pinned_mode}, 绘图工具={has_active_tools}")
-        if has_painter_tools:
-            print(f"绘图工具状态: {self.main_window.painter_tools}")
+        # print(f"钉图鼠标按下调试: 主窗口={has_main_window}, 模式={is_pinned_mode}, 绘图工具={has_active_tools}")
+        # if has_painter_tools:
+        #     print(f"绘图工具状态: {self.main_window.painter_tools}")
         
         if (has_main_window and has_mode and is_pinned_mode and has_painter_tools and has_active_tools):
-            print("钉图鼠标按下调试: 条件满足，开始委托事件")
+            # print("钉图鼠标按下调试: 条件满足，开始委托事件")
             # 有绘画工具激活时，将事件传递给主窗口处理
             # 在钉图模式下，直接使用钉图窗口的本地坐标
-            print(f"🎯 [钉图委托] 原始点击坐标: ({event.x()}, {event.y()})")
+            # print(f"🎯 [钉图委托] 原始点击坐标: ({event.x()}, {event.y()})")
             main_event = QMouseEvent(event.type(), event.pos(), 
                                    event.globalPos(), event.button(), event.buttons(), event.modifiers())
             # 添加标记表示这是来自钉图窗口的委托事件
             main_event._from_pinned_window = True
             main_event._pinned_window_instance = self  # 添加当前钉图窗口引用
-            print(f"钉图委托调试: 调用主窗口mousePressEvent，坐标=({event.x()}, {event.y()})")
+            # print(f"钉图委托调试: 调用主窗口mousePressEvent，坐标=({event.x()}, {event.y()})")
             self.main_window.mousePressEvent(main_event)
             # 设置标志表示我们正在处理绘画拖拽
             self.is_drawing_drag = True
-            print(f"钉图鼠标按下调试: 设置is_drawing_drag=True")
+            # print(f"钉图鼠标按下调试: 设置is_drawing_drag=True")
             # 调用父类方法以确保Qt正确跟踪鼠标状态
             super().mousePressEvent(event)
             return
             
-        print("钉图鼠标按下调试: 条件不满足，使用默认处理")
+        # print("钉图鼠标按下调试: 条件不满足，使用默认处理")
         # 重置绘画拖拽标志
         self.is_drawing_drag = False
         if event.button() == Qt.LeftButton:
