@@ -715,6 +715,12 @@ class MainWindow(QMainWindow):
                 border: 1px solid #c3e6cb;
                 border-radius: 3px;
             }
+            QLabel#versionLabel {
+                color: #6c757d;
+                font-size: 7pt;
+                font-weight: 400;
+                margin-top: 4px;
+            }
         """)
         
         # 主布局
@@ -779,6 +785,12 @@ class MainWindow(QMainWindow):
         self.status_label.setObjectName("statusLabel")
         self.status_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.status_label)
+        
+        # 版本信息
+        self.version_label = QLabel("バージョン: 1.01 | 更新日: 2025.11/2")
+        self.version_label.setObjectName("versionLabel")
+        self.version_label.setAlignment(Qt.AlignCenter)
+        status_layout.addWidget(self.version_label)
         
         parent_layout.addLayout(status_layout)
 
