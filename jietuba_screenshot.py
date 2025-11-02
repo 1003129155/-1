@@ -1266,6 +1266,8 @@ class Slabel(QLabel):  # 区域截图功能
         
         self.pen_pointlist = []
         self.pen_drawn_points_count = 0  # 记录实际绘制的画笔点数
+        self.pen_line_lock_mode = None  # 直线锁定模式: 'horizontal'(锁定Y) 或 'vertical'(锁定X) 或 None
+        self.pen_locked_coordinate = None  # 被锁定的坐标值
         self.drawtext_pointlist = []
         self.drawrect_pointlist = [[-2, -2], [-2, -2], 0]
         self.drawarrow_pointlist = [[-2, -2], [-2, -2], 0]
@@ -1455,11 +1457,11 @@ class Slabel(QLabel):  # 区域截图功能
         self.long_screenshot_btn.clicked.connect(self.start_long_screenshot_mode)
 
         # 设置按钮工具提示和图标（这些按钮现在在底部导航栏中）
-        self.pen.setToolTip('ペンツール')
+        self.pen.setToolTip('ペンツール (Shiftキー押しながらで直線)')
         self.pen.setIcon(QIcon(":/pen.png"))
         self.pen.clicked.connect(self.change_pen_fun)
 
-        self.highlighter.setToolTip('蛍光ペン')
+        self.highlighter.setToolTip('蛍光ペン (Shiftキー押しながらで直線)')
         self.highlighter.setIcon(self._build_highlighter_icon())
         self.highlighter.setIconSize(QSize(24, 24))
         self.highlighter.clicked.connect(self.change_highlighter_fun)
@@ -4781,9 +4783,22 @@ class Slabel(QLabel):  # 区域截图功能
                     # self.change_tools_fun("")
                 elif self._is_brush_tool_active():
                     tool_label = "荧光笔" if self.painter_tools['highlight_on'] else "画笔"
-                    print(f"主窗口鼠标按下调试: 开始{tool_label}绘制，添加起始点 [{press_x}, {press_y}]")
-                    self.pen_pointlist.append([-2, -2])  # 添加分隔符
-                    self.pen_pointlist.append([press_x, press_y])  # 添加起始点
+                    
+                    # 检测Shift键状态并初始化绘制
+                    shift_pressed = event.modifiers() & Qt.ShiftModifier
+                    if shift_pressed:
+                        # 开始直线模式，但不立即确定方向
+                        print(f"主窗口鼠标按下调试: 开始{tool_label}直线模式，起始点 [{press_x}, {press_y}]")
+                        self.pen_line_lock_mode = 'detecting'  # 标记为检测模式
+                        self.pen_locked_coordinate = None
+                    else:
+                        # 正常自由绘制模式
+                        print(f"主窗口鼠标按下调试: 开始{tool_label}自由绘制，添加起始点 [{press_x}, {press_y}]")
+                        self.pen_line_lock_mode = None
+                        self.pen_locked_coordinate = None
+                        self.pen_pointlist.append([-2, -2])  # 添加分隔符
+                        self.pen_pointlist.append([press_x, press_y])  # 添加起始点
+                    
                     self.pen_drawn_points_count = 1  # 重置计数器，从1开始（包括起始点）
                     # 记录起始点用于移动检测
                     self.pen_start_point = [press_x, press_y]
@@ -4921,9 +4936,12 @@ class Slabel(QLabel):  # 区域截图功能
                 
                 if self._is_brush_tool_active():
                     self.pen_pointlist.append([-2, -2])
+                    # 重置直线锁定状态
+                    self.pen_line_lock_mode = None
+                    self.pen_locked_coordinate = None
                     # 画笔工具：使用计数器检查是否有实际的绘制
                     tool_label = "荧光笔" if self.painter_tools['highlight_on'] else "画笔"
-                    print(f"{tool_label}撤销调试: 绘制了{self.pen_drawn_points_count}个点")
+                    print(f"{tool_label}撤销调试: 绘制了{self.pen_drawn_points_count}个点，直线锁定已重置")
                     if self.pen_drawn_points_count >= 2:
                         # 检查是否有实际的移动（使用记录的起始点和结束点）
                         has_movement = False
@@ -5195,6 +5213,36 @@ class Slabel(QLabel):  # 区域截图功能
                     print(f"主窗口绘画调试: left_button_push=True, 开始绘画处理")
                     if self._is_brush_tool_active():
                         tool_label = "荧光笔" if self.painter_tools['highlight_on'] else "画笔"
+                        
+                        # 处理直线绘制逻辑
+                        if self.pen_line_lock_mode == 'detecting':
+                            # 首次移动时决定方向
+                            if hasattr(self, 'pen_start_point') and self.pen_start_point:
+                                start_x, start_y = self.pen_start_point
+                                dx = abs(paint_x - start_x)
+                                dy = abs(paint_y - start_y)
+                                
+                                # 需要移动一定距离才能判断方向
+                                if dx + dy > 5:  
+                                    if dx > dy:
+                                        # 水平移动更多，锁定Y坐标
+                                        self.pen_line_lock_mode = 'horizontal'
+                                        self.pen_locked_coordinate = start_y
+                                        paint_y = self.pen_locked_coordinate
+                                        print(f"{tool_label}直线模式: 锁定水平线，Y={self.pen_locked_coordinate}")
+                                    else:
+                                        # 垂直移动更多，锁定X坐标
+                                        self.pen_line_lock_mode = 'vertical'
+                                        self.pen_locked_coordinate = start_x
+                                        paint_x = self.pen_locked_coordinate
+                                        print(f"{tool_label}直线模式: 锁定垂直线，X={self.pen_locked_coordinate}")
+                        elif self.pen_line_lock_mode == 'horizontal':
+                            # 已经在水平线模式，锁定Y坐标
+                            paint_y = self.pen_locked_coordinate
+                        elif self.pen_line_lock_mode == 'vertical':
+                            # 已经在垂直线模式，锁定X坐标
+                            paint_x = self.pen_locked_coordinate
+                        
                         print(f"添加{tool_label}点: [{paint_x}, {paint_y}]")
                         self.pen_pointlist.append([paint_x, paint_y])
                         self.pen_drawn_points_count += 1  # 增加计数器
