@@ -65,16 +65,17 @@ WS_EX_LAYERED = 0x00080000
 class ScrollCaptureWindow(QWidget):
     """滚动长截图窗口
     
-    特性：
+    特性:
     - 带边框的透明窗口
-    - 不拦截鼠标滚轮事件（鼠标可以直接操作后面的网页）
-    - 监听全局滚轮事件，每次滚轮后1秒截图
+    - 🆕 支持自动滚动模式(软件控制)和手动模式(用户滚轮)
+    - 自动模式: 软件模拟 PageDown/ArrowDown 按键,精确控制滚动距离
+    - 手动模式: 监听滚轮事件,被动触发截图
     - 底部有完成和取消按钮
     """
     
     finished = pyqtSignal()  # 完成信号
     cancelled = pyqtSignal()  # 取消信号
-    scroll_detected = pyqtSignal()  # 滚轮检测信号（用于线程安全通信）
+    scroll_detected = pyqtSignal(int)  # 滚轮检测信号(仅手动模式使用)
     
     def __init__(self, capture_rect, parent=None):
         """初始化滚动截图窗口
@@ -88,26 +89,49 @@ class ScrollCaptureWindow(QWidget):
         self.capture_rect = capture_rect
         self.screenshots = []  # 存储截图的列表
         
-        # 滚动检测相关
-        self.last_scroll_time = 0  # 最后一次滚动的时间戳
-        self.scroll_cooldown = 0.3  # 滚动后延迟截图时间（秒）- 改为更短
-        self.capture_mode = "immediate"  # 截图模式: "immediate"立即 或 "wait"等待停止
+        # 🆕 主动滚动模式配置
+        self.auto_scroll_mode = True  # True=软件控制滚动, False=用户手动滚动
+        self.scroll_step_ratio = 0.3  # 每次滚动截图区域高度的30% (保证70%重叠) - 🔥 改小重叠更多
+        self.scroll_interval = 0.8  # 滚动后等待时间(秒),让内容稳定
         
-        # 去重相关
-        self.last_screenshot_hash = None  # 上一张截图的哈希值（用于去重）
-        self.duplicate_threshold = 0.95  # 相似度阈值（95%以上认为重复）
+        # 🆕 平滑滚动配置 - 🔥 高频小步滚动
+        self.smooth_scroll_enabled = True  # 启用平滑滚动(像手机长截图)
+        self.smooth_scroll_speed = 20  # 每次小步滚动的像素数 🔥 改为20px超平滑
+        self.smooth_scroll_delay = 0.015  # 每次小步之间的延迟(秒) 🔥 15ms高频
+        
+        # 滚动距离记录(用于拼接时的"大致范围")
+        self.actual_scroll_distances = []  # 记录每次实际滚动的像素数
+        
+        # 🆕 自动滚动状态控制
+        self.is_auto_scrolling = False  # 是否正在自动滚动
+        self.target_window_hwnd = None  # 目标窗口句柄(需要滚动的窗口)
         
         # 定时器
-        self.capture_timer = QTimer(self)  # 截图定时器
+        self.auto_scroll_timer = QTimer(self)  # 自动滚动定时器
+        self.auto_scroll_timer.setSingleShot(True)
+        self.auto_scroll_timer.timeout.connect(self._auto_scroll_and_capture)
+        
+        # 手动模式相关(保留兼容)
+        self.last_scroll_time = 0
+        self.scroll_cooldown = 0.3
+        self.capture_mode = "immediate"
+        self.scroll_tick_count = 0
+        
+        self.capture_timer = QTimer(self)
         self.capture_timer.setSingleShot(True)
         self.capture_timer.timeout.connect(self._do_capture)
         
-        self.scroll_check_timer = QTimer(self)  # 滚动检测定时器
-        self.scroll_check_timer.setInterval(100)  # 每100ms检查一次
+        self.scroll_check_timer = QTimer(self)
+        self.scroll_check_timer.setInterval(100)
         self.scroll_check_timer.timeout.connect(self._check_scroll_stopped)
         
-        # 连接滚轮检测信号到主线程处理函数
-        self.scroll_detected.connect(self._handle_scroll_in_main_thread)
+        # 去重相关
+        self.last_screenshot_hash = None  # 上一张截图的哈希值(用于去重)
+        self.duplicate_threshold = 0.95  # 相似度阈值(95%以上认为重复)
+        
+        # 🆕 仅手动模式需要连接滚轮信号
+        if not self.auto_scroll_mode:
+            self.scroll_detected.connect(self._handle_scroll_in_main_thread)
         
         self._setup_window()
         self._setup_ui()
@@ -263,12 +287,35 @@ class ScrollCaptureWindow(QWidget):
         button_layout = QHBoxLayout(button_bar)  # 改回水平布局
         button_layout.setContentsMargins(10, 5, 10, 5)
         
-        # 提示文字标签（放在左侧）
-        tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
+        # 提示文字标签(放在左侧)
+        if self.auto_scroll_mode:
+            tip_label = QLabel("🤖 自动滚动模式 - 点击\"开始\"后软件将自动滚动截图")
+        else:
+            tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
         tip_label.setStyleSheet("color: #FFD700; font-size: 9pt; font-weight: bold;")
         button_layout.addWidget(tip_label)
         
         button_layout.addStretch()
+        
+        # 🆕 自动滚动模式的开始/停止按钮
+        if self.auto_scroll_mode:
+            self.start_auto_btn = QPushButton("▶ 開始自動スクロール")
+            self.start_auto_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2196F3;
+                    color: white;
+                    border: none;
+                    padding: 8px 20px;
+                    font-size: 11pt;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #1976D2;
+                }
+            """)
+            self.start_auto_btn.clicked.connect(self._toggle_auto_scroll)
+            button_layout.addWidget(self.start_auto_btn)
         
         # 截图计数标签
         self.count_label = QLabel("スクショ: 0 枚")
@@ -313,42 +360,317 @@ class ScrollCaptureWindow(QWidget):
         button_layout.addWidget(self.cancel_btn)
         
         layout.addWidget(button_bar)
+    
+    def _toggle_auto_scroll(self):
+        """切换自动滚动状态"""
+        if self.is_auto_scrolling:
+            # 停止滚动
+            self._stop_auto_scroll()
+        else:
+            # 开始滚动
+            self._start_auto_scroll()
+    
+    def _start_auto_scroll(self):
+        """开始自动滚动截图"""
+        print("\n🚀 开始自动滚动长截图...")
+        print(f"   滚动步长: {self.scroll_step_ratio*100:.0f}% 截图区域高度")
+        print(f"   重叠率: {(1-self.scroll_step_ratio)*100:.0f}%")
         
-    def _setup_mouse_hook(self):
-        """设置Windows鼠标钩子以监听全局滚轮事件"""
+        # 🎯 获取截图区域下方的目标窗口
+        self.target_window_hwnd = self._get_window_under_capture_area()
+        if not self.target_window_hwnd:
+            print("❌ 无法找到目标窗口,请确保截图区域下方有浏览器或应用窗口")
+            return
+        
+        # 设置状态
+        self.is_auto_scrolling = True
+        
+        # 更新按钮
+        if hasattr(self, 'start_auto_btn'):
+            self.start_auto_btn.setText("⏸ 停止")
+            self.start_auto_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #FF9800;
+                    color: white;
+                    border: none;
+                    padding: 8px 20px;
+                    font-size: 11pt;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #F57C00;
+                }
+            """)
+        
+        # 立即截取第一张
+        self._do_capture()
+        
+        # 启动自动滚动
+        QTimer.singleShot(int(self.scroll_interval * 1000), self._auto_scroll_and_capture)
+    
+    def _stop_auto_scroll(self):
+        """停止自动滚动"""
+        print("\n⏸ 停止自动滚动")
+        self.is_auto_scrolling = False
+        
+        # 更新按钮
+        if hasattr(self, 'start_auto_btn'):
+            self.start_auto_btn.setText("▶ 開始自動スクロール")
+            self.start_auto_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2196F3;
+                    color: white;
+                    border: none;
+                    padding: 8px 20px;
+                    font-size: 11pt;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #1976D2;
+                }
+            """)
+    
+    def _get_window_under_capture_area(self):
+        """获取截图区域下方的窗口句柄
+        
+        Returns:
+            int: 窗口句柄,如果找不到返回None
+        """
         try:
-            # 使用Windows API设置窗口透明鼠标事件
-            hwnd = int(self.transparent_area.winId())
+            import ctypes
+            from ctypes import wintypes
             
             user32 = ctypes.windll.user32
-            # 获取当前扩展样式
-            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            # 添加透明标志，使鼠标事件穿透
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
             
-            print(f"✅ 窗口已设置为鼠标穿透模式")
+            # 获取截图区域中心点坐标
+            center_x = self.capture_rect.x() + self.capture_rect.width() // 2
+            center_y = self.capture_rect.y() + self.capture_rect.height() // 2
             
-            # 使用全局事件监听
-            from pynput import mouse
+            # 获取该点下方的窗口(忽略我们自己的透明窗口)
+            point = wintypes.POINT(center_x, center_y)
+            hwnd = user32.WindowFromPoint(point)
             
-            def on_scroll(x, y, dx, dy):
-                """滚轮事件回调（在pynput线程中）"""
-                # 检查鼠标是否在截图区域内
-                if self._is_mouse_in_capture_area(x, y):
-                    print(f"🖱️ 检测到滚轮事件: ({x}, {y}), dy={dy}")
-                    # 使用信号触发主线程处理（线程安全）
-                    try:
-                        self.scroll_detected.emit()
-                    except Exception as e:
-                        print(f"❌ 触发滚动信号失败: {e}")
+            if hwnd:
+                # 获取窗口标题
+                length = user32.GetWindowTextLengthW(hwnd)
+                buff = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buff, length + 1)
+                title = buff.value
+                
+                print(f"🎯 检测到目标窗口: {title} (HWND: {hwnd})")
+                return hwnd
+            else:
+                print("❌ 未检测到窗口")
+                return None
+                
+        except Exception as e:
+            print(f"❌ 获取目标窗口失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _auto_scroll_and_capture(self):
+        """执行一次自动滚动并截图"""
+        # 检查是否应该停止
+        if not self.is_auto_scrolling:
+            print("⏹ 自动滚动已停止")
+            return
+        
+        try:
+            # 计算滚动距离(截图区域高度 × 滚动比例)
+            scroll_pixels = int(self.capture_rect.height() * self.scroll_step_ratio)
             
-            # 创建监听器
-            self.mouse_listener = mouse.Listener(on_scroll=on_scroll)
-            self.mouse_listener.start()
-            print("✅ 全局滚轮监听器已启动")
+            print(f"\n🔽 模拟滚动 {scroll_pixels}px...")
+            
+            # 🆕 模拟滚动 - 发送按键到目标窗口
+            success = self._simulate_scroll(scroll_pixels)
+            
+            if success:
+                # 记录实际滚动距离
+                self.actual_scroll_distances.append(scroll_pixels)
+                
+                # 🆕 平滑滚动需要等待滚动动画完成
+                # 计算滚动总时长: steps × delay
+                if self.smooth_scroll_enabled:
+                    steps = max(1, scroll_pixels // self.smooth_scroll_speed)
+                    scroll_duration = steps * self.smooth_scroll_delay
+                    wait_time = scroll_duration + self.scroll_interval  # 滚动时间 + 稳定时间
+                else:
+                    wait_time = self.scroll_interval
+                
+                print(f"   ⏱️ 等待 {wait_time:.1f}秒 让内容稳定...")
+                
+                # 等待内容稳定后截图
+                QTimer.singleShot(int(wait_time * 1000), lambda: self._do_capture() if self.is_auto_scrolling else None)
+                
+                # 继续下一次滚动(在截图后触发)
+                QTimer.singleShot(int((wait_time + 0.5) * 1000), lambda: self._auto_scroll_and_capture() if self.is_auto_scrolling else None)
+            else:
+                print("❌ 滚动模拟失败")
+                self._stop_auto_scroll()
+                
+        except Exception as e:
+            print(f"❌ 自动滚动出错: {e}")
+            import traceback
+            traceback.print_exc()
+            self._stop_auto_scroll()
+    
+    def _simulate_scroll(self, pixels: int) -> bool:
+        """模拟平滑滚动指定像素距离(像手机长截图那样丝滑)
+        
+        Args:
+            pixels: 要滚动的像素数
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            user32 = ctypes.windll.user32
+            
+            # 🎯 关键: 先激活目标窗口,确保滚动发送到正确的窗口
+            if self.target_window_hwnd:
+                try:
+                    user32.SetForegroundWindow(self.target_window_hwnd)
+                    time.sleep(0.1)  # 等待窗口激活
+                    print(f"   ✅ 已激活目标窗口 (HWND: {self.target_window_hwnd})")
+                except Exception as e:
+                    print(f"   ⚠️ 激活窗口失败: {e}, 继续尝试...")
+            
+            if self.smooth_scroll_enabled:
+                # � 平滑滚动模式 - 多次小步滚动,模拟手机长截图效果
+                print(f"   🌊 平滑滚动模式: 目标={pixels}px, 步长={self.smooth_scroll_speed}px")
+                
+                WHEEL_DELTA = 120
+                WM_MOUSEWHEEL = 0x020A
+                
+                # 计算需要多少次小步滚动
+                steps = max(1, pixels // self.smooth_scroll_speed)
+                
+                # 获取截图区域中心点(发送滚轮事件到这个位置)
+                center_x = self.capture_rect.x() + self.capture_rect.width() // 2
+                center_y = self.capture_rect.y() + self.capture_rect.height() // 2
+                
+                print(f"   📊 将分 {steps} 步滚动,每步约 {pixels//steps}px")
+                
+                # 平滑滚动: 多次小滚动
+                for i in range(steps):
+                    # 每次滚动一个 WHEEL_DELTA (负数 = 向下)
+                    wparam = (-WHEEL_DELTA << 16)
+                    lparam = (center_y << 16) | (center_x & 0xFFFF)
+                    
+                    user32.PostMessageW(
+                        self.target_window_hwnd,
+                        WM_MOUSEWHEEL,
+                        wparam,
+                        lparam
+                    )
+                    
+                    # 小延迟让滚动丝滑连续
+                    time.sleep(self.smooth_scroll_delay)
+                    
+                    # 进度显示(每10步显示一次)
+                    if (i + 1) % 10 == 0 or i == steps - 1:
+                        progress = (i + 1) / steps * 100
+                        print(f"      进度: {progress:.0f}% ({i+1}/{steps})", end='\r')
+                
+                print()  # 换行
+                return True
+                
+            else:
+                # 🎯 快速滚动模式 - 一次性滚动(旧方式)
+                WHEEL_DELTA = 120
+                WM_MOUSEWHEEL = 0x020A
+                
+                # 计算需要的滚动次数(保守估计: 1次 ≈ 100px)
+                scroll_count = max(1, pixels // 100)
+                
+                print(f"   🖱️ 快速滚动: {scroll_count} 次 (目标: {pixels}px)")
+                
+                center_x = self.capture_rect.x() + self.capture_rect.width() // 2
+                center_y = self.capture_rect.y() + self.capture_rect.height() // 2
+                
+                for i in range(scroll_count):
+                    wparam = (-WHEEL_DELTA << 16)
+                    lparam = (center_y << 16) | (center_x & 0xFFFF)
+                    
+                    user32.PostMessageW(
+                        self.target_window_hwnd,
+                        WM_MOUSEWHEEL,
+                        wparam,
+                        lparam
+                    )
+                    time.sleep(0.05)
+                    
+                return True
             
         except Exception as e:
-            print(f"❌ 设置鼠标钩子失败: {e}")
+            print(f"❌ 模拟滚动失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        
+    def _setup_mouse_hook(self):
+        """设置Windows鼠标钩子以监听全局滚轮事件(仅手动模式)"""
+        # 🆕 自动滚动模式下不需要监听滚轮
+        if self.auto_scroll_mode:
+            print("🤖 自动滚动模式 - 跳过滚轮监听器设置")
+            # 仍然设置窗口穿透
+            try:
+                hwnd = int(self.transparent_area.winId())
+                user32 = ctypes.windll.user32
+                ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
+                print(f"✅ 窗口已设置为鼠标穿透模式")
+            except Exception as e:
+                print(f"❌ 设置窗口穿透失败: {e}")
+            return
+        
+        # 手动模式才设置滚轮监听
+        try:
+            # 使用Windows API设置窗口透明鼠标事件（需在主线程执行）
+            hwnd = int(self.transparent_area.winId())
+            user32 = ctypes.windll.user32
+            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
+            print(f"✅ 窗口已设置为鼠标穿透模式")
+
+            # 将可能较慢的模块导入与监听器启动放到后台线程，避免首次阻塞UI
+            import threading
+
+            def _init_listener_bg():
+                try:
+                    from pynput import mouse  # 首次导入较慢，放后台
+
+                    def on_scroll(x, y, dx, dy):
+                        """滚轮事件回调(在pynput线程中)"""
+                        if self._is_mouse_in_capture_area(x, y):
+                            # ⚠️ 注意: pynput的dy只是滚轮刻度数(±1, ±2...),不是像素距离
+                            # 实际滚动像素数受DPI、系统设置、应用缩放等影响,无法准确计算
+                            # 因此这里仅作为"触发信号",实际滚动距离由图像对比反推
+                            print(f"🖱️ 检测到滚轮事件: ({x}, {y}), 刻度dy={dy}")
+                            try:
+                                self.scroll_detected.emit(dy)  # 仅传递刻度数作为触发信号
+                            except Exception as e:
+                                print(f"❌ 触发滚动信号失败: {e}")
+
+                    # 创建并启动监听器（pynput内部也会使用线程）
+                    self.mouse_listener = mouse.Listener(on_scroll=on_scroll)
+                    self.mouse_listener.start()
+                    print("✅ 全局滚轮监听器已启动")
+                except Exception as e:
+                    print(f"❌ 设置鼠标钩子失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            threading.Thread(target=_init_listener_bg, daemon=True).start()
+
+        except Exception as e:
+            print(f"❌ 设置窗口鼠标穿透时出错: {e}")
             import traceback
             traceback.print_exc()
     
@@ -477,8 +799,15 @@ class ScrollCaptureWindow(QWidget):
             print(f"❌ 强制修复窗口位置时出错: {e}")
     
     def _capture_initial_screenshot(self):
-        """截取初始截图（窗口显示时的区域内容）"""
-        print("🎬 截取初始截图（第1张）...")
+        """截取初始截图(窗口显示时的区域内容)"""
+        print("🎬 截取初始截图(第1张)...")
+        
+        # 🆕 自动模式不在这里截图,等待用户点击"开始"按钮
+        if self.auto_scroll_mode:
+            print("🤖 自动模式 - 等待用户点击\"开始\"按钮...")
+            return
+        
+        # 手动模式立即截取第一张
         self._do_capture()
         
         # 为初始截图生成哈希（用于后续去重）
@@ -492,21 +821,29 @@ class ScrollCaptureWindow(QWidget):
         return (self.capture_rect.x() <= x <= self.capture_rect.x() + self.capture_rect.width() and
                 self.capture_rect.y() <= y <= self.capture_rect.y() + self.capture_rect.height())
     
-    def _handle_scroll_in_main_thread(self):
-        """在主线程中处理滚轮事件（立即截图模式）"""
+    def _handle_scroll_in_main_thread(self, dy):
+        """在主线程中处理滚轮事件(立即截图模式)
+        
+        Args:
+            dy: 滚轮刻度数(±1, ±2...), 仅作为触发信号,不代表精确像素距离
+        """
         import time
+        
+        # 仅统计滚轮次数(调试用)
+        self.scroll_tick_count += abs(dy)
+        print(f"📊 滚轮刻度累计: {self.scroll_tick_count} (本次±{abs(dy)})")
         
         # 更新最后滚动时间
         self.last_scroll_time = time.time()
         
         if self.capture_mode == "immediate":
-            # 立即截图模式：延迟很短时间后截图（让滚动动画完成）
+            # 立即截图模式: 延迟很短时间后截图(让滚动动画完成)
             if self.capture_timer.isActive():
                 self.capture_timer.stop()
             self.capture_timer.start(int(self.scroll_cooldown * 1000))  # 默认300ms
-            print(f"⚡ 检测到滚动，{self.scroll_cooldown}秒后截图...")
+            print(f"⚡ 检测到滚动, {self.scroll_cooldown}秒后截图...")
         else:
-            # 等待停止模式：启动检测定时器
+            # 等待停止模式: 启动检测定时器
             if not self.scroll_check_timer.isActive():
                 self.scroll_check_timer.start()
                 print("🔄 开始检测滚动停止...")
@@ -558,11 +895,13 @@ class ScrollCaptureWindow(QWidget):
         return similarity >= self.duplicate_threshold
     
     def _do_capture(self):
-        """执行截图（不进行去重，所有截图都保存）"""
+        """执行截图(不进行去重,所有截图都保存)"""
         try:
             current_count = len(self.screenshots) + 1
+            
             print(f"\n📸 截取第 {current_count} 张图片")
             print(f"   区域: x={self.capture_rect.x()}, y={self.capture_rect.y()}, w={self.capture_rect.width()}, h={self.capture_rect.height()}")
+            print(f"   ⚠️ 注意: 滚轮刻度≠实际像素,实际偏移由图像匹配计算")
             
             # 使用Qt截取屏幕
             screen = QGuiApplication.primaryScreen()
@@ -570,7 +909,7 @@ class ScrollCaptureWindow(QWidget):
                 print("❌ 无法获取屏幕")
                 return
             
-            # 截取指定区域（精确使用原始capture_rect，不包含边框）
+            # 截取指定区域(精确使用原始capture_rect,不包含边框)
             pixmap = screen.grabWindow(
                 0,
                 self.capture_rect.x(),
@@ -594,8 +933,8 @@ class ScrollCaptureWindow(QWidget):
                 'BGRA'
             ).convert('RGB')
             
-            # 🆕 截图阶段不进行去重检测，所有截图都保存
-            # 去重逻辑移到合成阶段（smart_stitch.py）
+            # 截图阶段不进行去重检测,所有截图都保存
+            # 去重逻辑移到合成阶段(smart_stitch.py)
             
             # 添加到截图列表
             self.screenshots.append(pil_image)
@@ -649,7 +988,14 @@ class ScrollCaptureWindow(QWidget):
     def _cleanup(self):
         """清理资源"""
         try:
+            # 🆕 停止自动滚动
+            if hasattr(self, 'is_auto_scrolling'):
+                self.is_auto_scrolling = False
+            
             # 停止所有定时器
+            if hasattr(self, 'auto_scroll_timer'):
+                self.auto_scroll_timer.stop()
+            
             if hasattr(self, 'capture_timer'):
                 self.capture_timer.stop()
             
@@ -674,3 +1020,24 @@ class ScrollCaptureWindow(QWidget):
     def get_screenshots(self):
         """获取所有截图"""
         return self.screenshots
+    
+    def get_scroll_distances(self):
+        """获取滚动距离列表(用于拼接时的大致范围估算)
+        
+        Returns:
+            list[int]: 每次截图之间的滚动像素数
+                      自动模式: 返回模拟的滚动距离(作为初始估算)
+                      手动模式: 空列表(距离未知,完全依赖图像匹配)
+                      
+        注意: 返回的是"理论滚动距离",实际滚动可能有偏差
+             拼接算法会在此基础上用图像匹配微调
+        """
+        if self.auto_scroll_mode:
+            # 自动模式: 返回理论滚动距离
+            # 注意: 由于系统设置、浏览器行为等因素,实际滚动距离可能与理论值有10-20%偏差
+            # 拼接算法应该在 ±100px 范围内搜索来容错
+            return self.actual_scroll_distances
+        else:
+            # 手动模式: 无法预测滚动距离
+            return []
+
