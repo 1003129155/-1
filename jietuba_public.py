@@ -23,10 +23,6 @@ jietuba_public.py - 公共配置和工具函数模块
 - PLATFORM_SYS: 系统平台标识
 - OCR_AVAILABLE: OCR功能可用性(已禁用)
 
-注意:
-- OCR 功能已移除以减小打包体积
-- 网络相关功能已移除
-- 语音功能已移除
 
 依赖模块:
 - PyQt5: GUI框架
@@ -36,10 +32,7 @@ jietuba_public.py - 公共配置和工具函数模块
     from jietuba_public import CONFIG_DICT, get_screenshot_save_dir
     save_dir = get_screenshot_save_dir()
 """
-# @Time    : 2020/11/13 22:42
-# @Author  : Fandes
-# @FileName: public.py
-# @Software: PyCharm
+
 import hashlib
 import http.client
 import os
@@ -48,7 +41,6 @@ import re
 import sys
 import time
 import cv2
-# import requests  # 网络功能已移除，减小打包体积
 from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QStandardPaths, QTimer, QSettings, QFileInfo, \
     QUrl, QObject, QSize
 from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QSettings, QSizeF, QStandardPaths, QUrl
@@ -108,44 +100,6 @@ def get_screenshot_save_dir():
 
 apppath = get_apppath()
 
-# 网络功能已移除 - 减小打包体积
-# def get_request_session(url="https://github.com"):
-#     # 获取系统的代理设置
-#     proxies = requests.utils.get_environ_proxies(url)
-#     # 创建一个 session 对象
-#     session = requests.session()
-#     # 设置代理配置
-#     session.proxies = proxies
-#     return session
-
-# def get_UserAgent():
-#     ua = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Mobile Safari/537.36 Edg/108.0.1462.54"
-#     try:
-#         ua_file = os.path.join(apppath,"fake_useragent_0.1.11.json")
-#         if os.path.exists(ua_file):
-#             ua = UserAgent(path=os.path.join(apppath,"fake_useragent_0.1.11.json"),verify_ssl=False).random
-#         else:
-#             ua = UserAgent(verify_ssl=False).random
-#     except Exception as e:
-#         print(e,"get_UserAgent")
-#     return ua
-
-# def gethtml(url, times=3):  # 下载一个链接
-#     try:
-#         ua = get_UserAgent()
-#         session = get_request_session(url)
-#         response = session.get(url, headers={"User-Agent": ua}, timeout=8, verify=False)
-#         response.encoding = 'utf-8'
-#         if response.status_code == 200:
-#             return response.text
-#     except Exception as e:
-#         error_msg = "{}".format(sys.exc_info())
-#         print(error_msg, '重试中')
-#         time.sleep(1)
-#         if times > 0:
-#             return gethtml(url, times=times - 1)
-#         else:
-#             return error_msg
 class TipsShower(QLabel):
     def __init__(self, text, targetarea=(0, 0, 0, 0), parent=None, fontsize=35, timeout=1000):
         super().__init__(parent)
@@ -285,11 +239,7 @@ class mutilocr(QThread):
             # OCR功能已移除，跳过文字识别
             self.statusbarsignal.emit('OCR功能已禁用: ' + filename)
             self.ocr_signal.emit(self.filename, "\n>>>>OCR功能已移除，跳过识别:{}<<<<\n".format(filename))
-            # th = OcrimgThread(img)
-            # th.result_show_signal.connect(self.mutil_cla_signalhandle)
-            # th.start()
-            # th.wait()
-            # self.threadlist.append(th)
+
 
     def mutil_cla_signalhandle(self, text):
         """一个结果回调"""
@@ -428,13 +378,5 @@ class Commen_Thread(QThread):
 
 
 if __name__ == '__main__':
-    # 网络功能已移除 - 以下代码已禁用
-    # app = QApplication(sys.argv)
-    # w = Transparent_windows(20, 20, 500, 200)
-    # w.show()
-    # import json
-    # a = gethtml("https://raw.githubusercontent.com/fandesfyf/JamTools/main/ci_scripts/versions.json")  # 网络功能已移除
-    # print(json.loads(a))
-    # w.setGeometry()
-    # sys.exit(app.exec_())
+
     pass  # 保持语法正确性
