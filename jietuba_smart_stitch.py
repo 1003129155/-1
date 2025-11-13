@@ -247,11 +247,13 @@ def _template_matching_fallback(img1: np.ndarray, img2: np.ndarray,
 def find_overlap_region(img1: np.ndarray, img2: np.ndarray, 
                        overlap_ratio: float = 0.3,
                        min_match_count: int = 10,
-                       use_multi_scale: bool = True) -> Tuple[Optional[int], float]:
+                       use_multi_scale: bool = True,
+                       scroll_distance: int = None) -> Tuple[Optional[int], float]:
     """
-    使用ORB特征点匹配找到两张图片的重叠区域
+    使用ORB特征点匹配找到两张图片的重叠区域（支持滚动距离辅助）
     
-    优化版本 (2025-10-29 升级):
+    优化版本 (2025-11-13 混合方案升级):
+    - 🆕 滚动距离辅助：使用物理滚动距离缩小搜索范围，提高准确性
     - 🆕 Y轴几何约束验证 (Y偏移不应为负数)
     - 🆕 异常检测 + 自动重试机制 (扩大搜索区域)
     - 多尺度特征检测(提高鲁棒性)
@@ -265,16 +267,39 @@ def find_overlap_region(img1: np.ndarray, img2: np.ndarray,
         overlap_ratio: 搜索范围比例（不是预估重叠，而是搜索区域大小）
         min_match_count: 最小匹配点数量
         use_multi_scale: 是否使用多尺度检测
+        scroll_distance: 🆕 滚动距离（像素），用于缩小搜索范围
         
     Returns:
         (offset_y, confidence): Y轴偏移量和置信度
     """
-    # 🆕 尝试多种搜索策略
-    strategies = [
-        {'name': '标准策略', 'search_ratio_multiplier': 2.0, 'use_full_height': False},
-        {'name': '扩大搜索', 'search_ratio_multiplier': 3.0, 'use_full_height': False},
-        {'name': '全图搜索', 'search_ratio_multiplier': 1.0, 'use_full_height': True},
-    ]
+    # 🆕 根据是否有滚动距离信息选择搜索策略
+    if scroll_distance is not None and scroll_distance > 0:
+        # 有滚动距离信息：使用精确搜索
+        h1 = img1.shape[0]
+        
+        # 🔧 滚动距离校准：实际图像偏移通常小于理论滚动距离
+        # 根据经验，实际偏移约为滚动距离的50-70%
+        scroll_efficiency = 0.6  # 可以根据实际效果调整
+        estimated_offset = int(scroll_distance * scroll_efficiency)
+        
+        print(f"📏 使用滚动距离辅助: {scroll_distance}px → 估算offset={estimated_offset} (校准后，效率={scroll_efficiency})")
+        print(f"   逻辑: 滚动{scroll_distance}px × {scroll_efficiency} = img2顶部对应img1第{estimated_offset}px位置")
+        
+        strategies = [
+            {'name': '精确搜索(±15px)', 'search_ratio_multiplier': 2.0, 'use_full_height': False, 
+             'centered_search': True, 'center_offset': estimated_offset, 'search_range': 15},
+            {'name': '扩大搜索(±30px)', 'search_ratio_multiplier': 2.0, 'use_full_height': False,
+             'centered_search': True, 'center_offset': estimated_offset, 'search_range': 30},
+            {'name': '后备搜索(±60px)', 'search_ratio_multiplier': 2.0, 'use_full_height': False,
+             'centered_search': True, 'center_offset': estimated_offset, 'search_range': 60},
+        ]
+    else:
+        # 无滚动距离：使用传统大范围搜索
+        strategies = [
+            {'name': '标准策略', 'search_ratio_multiplier': 2.0, 'use_full_height': False},
+            {'name': '扩大搜索', 'search_ratio_multiplier': 3.0, 'use_full_height': False},
+            {'name': '全图搜索', 'search_ratio_multiplier': 1.0, 'use_full_height': True},
+        ]
     
     for strategy_idx, strategy in enumerate(strategies):
         try:
@@ -332,14 +357,38 @@ def _try_find_overlap(img1: np.ndarray, img2: np.ndarray,
             print(f"\n🔍 特征点匹配: img1={h1}x{w1}, img2={h2}x{w2}")
         print(f"   策略: {strategy['name']}")
         
-        # 1. 根据策略提取搜索区域
-        if strategy['use_full_height']:
+        # 🆕 1. 根据策略提取搜索区域（支持centered_search）
+        if strategy.get('centered_search', False):
+            # 精确搜索模式：在估算位置附近搜索重叠区域
+            center_offset = strategy['center_offset']
+            search_range = strategy['search_range']
+            
+            # 🔧 修正搜索区域逻辑：搜索重叠区域，而不是任意区域
+            # offset=155px 意味着 img2顶部对应img1第155px位置
+            # 重叠区域是：img1[155:518] 对应 img2[0:363]
+            
+            # img1搜索区域：从offset开始，允许±search_range的误差
+            region1_start = max(0, center_offset - search_range)
+            region1_end = min(h1, h1)  # 搜索到img1底部
+            
+            # img2搜索区域：从顶部开始，高度对应重叠区域
+            overlap_height = h1 - center_offset + search_range
+            region2_end = min(h2, overlap_height)
+            
+            region1 = img1[region1_start:region1_end, :]
+            region2 = img2[0:region2_end, :]
+            
+            print(f"   🎯 中心搜索: offset={center_offset}px, 范围=±{search_range}px")
+            print(f"   搜索区域: region1=[{region1_start}:{region1_end}], region2=[0:{region2_end}]")
+            print(f"   逻辑: img1[{center_offset}:] 应该匹配 img2[0:], 允许±{search_range}px误差")
+            
+        elif strategy['use_full_height']:
             # 全图搜索
             region1 = img1
             region2 = img2
             region1_start = 0
         else:
-            # 部分搜索
+            # 部分搜索（传统方式）
             search_ratio = max(0.5, overlap_ratio * strategy['search_ratio_multiplier'])
             search_height1 = int(h1 * search_ratio)
             search_height2 = int(h2 * search_ratio)
@@ -498,6 +547,21 @@ def _try_find_overlap(img1: np.ndarray, img2: np.ndarray,
         print(f"   置信度: {confidence:.3f}")
         print(f"      匹配={num_confidence:.2f}, 稳定={std_confidence:.2f}, 距离={dist_confidence:.2f}")
         print(f"      内点={inlier_confidence:.2f}, X约束={x_constraint_confidence:.2f}, 分布={spatial_confidence:.2f}")
+        
+        # 🆕 滚动距离校准反馈（如果有滚动距离信息）
+        if strategy.get('centered_search', False) and 'center_offset' in strategy:
+            expected_offset = strategy['center_offset']
+            actual_offset = offset_y
+            offset_error = abs(actual_offset - expected_offset)
+            
+            print(f"   📊 滚动校准: 预期offset={expected_offset}px, 实际={actual_offset}px, 误差={offset_error}px")
+            
+            if offset_error <= 30:
+                print(f"   ✅ 滚动校准良好: 误差在±30px范围内")
+            elif offset_error <= 60:
+                print(f"   ⚠️ 滚动校准偏差: 误差{offset_error}px, 建议调整滚动效率")
+            else:
+                print(f"   ❌ 滚动校准失效: 误差{offset_error}px过大")
         
         # 10. 验证合理性（改进的逻辑）
         overlap_height = h1 - offset_y
@@ -799,9 +863,10 @@ def _pairwise_stitch_recursive(images: List[np.ndarray],
                                overlap_ratio: float,
                                min_confidence: float,
                                blend: bool,
-                               level: int = 0) -> np.ndarray:
+                               level: int = 0,
+                               scroll_distances: List[int] = None) -> np.ndarray:
     """
-    递归式两两配对拼接（分治法）
+    递归式两两配对拼接(分治法)
     
     工作原理:
       第1轮: [img1+img2, img3+img4, img5+img6, ...]  <- 小图+小图
@@ -809,16 +874,17 @@ def _pairwise_stitch_recursive(images: List[np.ndarray],
       第3轮: [result1+result2]                        <- 大图+大图
     
     优势:
-      ✅ 每次匹配的图片大小相近，特征点分布均衡
-      ✅ 减少累积误差，避免小图与巨大累积图匹配
-      ✅ 符合分治算法思想，更鲁棒
+      ✅ 每次匹配的图片大小相近,特征点分布均衡
+      ✅ 减少累积误差,避免小图与巨大累积图匹配
+      ✅ 符合分治算法思想,更鲁棒
     
     Args:
         images: OpenCV格式的图片列表
         overlap_ratio: 搜索范围比例
         min_confidence: 最小置信度
         blend: 是否混合
-        level: 递归层级（用于日志）
+        level: 递归层级(用于日志)
+        scroll_distances: 每次截图之间的滚动距离(像素)
     
     Returns:
         拼接后的OpenCV图像
@@ -841,30 +907,37 @@ def _pairwise_stitch_recursive(images: List[np.ndarray],
             
             print(f"{indent}   📎 配对 {i//2+1}: img{i+1}({h1}px) + img{i+2}({h2}px)")
             
+            # 🆕 获取当前配对的滚动距离(第i+1张的滚动距离)
+            scroll_distance = None
+            if scroll_distances and level == 0:  # 仅在第一轮使用原始滚动距离
+                # images[i+1]对应cv2_images[i+1],其滚动距离为scroll_distances[i+1]
+                if i + 1 < len(scroll_distances):
+                    scroll_distance = scroll_distances[i + 1]
+            
             # 使用特征点匹配
-            offset_y, confidence = find_overlap_region(img1, img2, overlap_ratio)
+            offset_y, confidence = find_overlap_region(img1, img2, overlap_ratio, scroll_distance=scroll_distance)
             
             if offset_y is not None and confidence >= min_confidence:
                 overlap_pixels = h1 - offset_y
-                # 修复: 使用 >= 而不是 >，允许完全重叠的情况
+                # 修复: 使用 >= 而不是 >, 允许完全重叠的情况
                 if overlap_pixels > 0 and offset_y + h2 >= h1:
                     # 智能拼接
                     print(f"{indent}      ✅ 智能拼接: overlap={overlap_pixels}px, conf={confidence:.3f}")
                     result = _blend_stitch(img1, img2, offset_y, overlap_pixels, blend)
                     next_level_images.append(result)
                 else:
-                    # 无效重叠，简单拼接
-                    print(f"{indent}      ⚠️ 无效重叠，简单拼接")
+                    # 无效重叠, 简单拼接
+                    print(f"{indent}      ⚠️ 无效重叠, 简单拼接")
                     result = _simple_append(img1, img2)
                     next_level_images.append(result)
             else:
-                # 匹配失败，简单拼接
+                # 匹配失败, 简单拼接
                 conf_str = f"{confidence:.3f}" if confidence > 0 else "N/A"
-                print(f"{indent}      ⚠️ 匹配失败 (conf={conf_str})，简单拼接")
+                print(f"{indent}      ⚠️ 匹配失败 (conf={conf_str}), 简单拼接")
                 result = _simple_append(img1, img2)
                 next_level_images.append(result)
         else:
-            # 奇数个，最后一张单独保留
+            # 奇数个, 最后一张单独保留
             print(f"{indent}   📌 保留: img{i+1} (无配对)")
             next_level_images.append(images[i])
     
@@ -874,7 +947,8 @@ def _pairwise_stitch_recursive(images: List[np.ndarray],
         overlap_ratio, 
         min_confidence, 
         blend, 
-        level + 1
+        level + 1,
+        scroll_distances=None  # 后续轮次不再使用滚动距离
     )
 
 
@@ -897,17 +971,25 @@ def _calculate_overlap_ratio(img1: np.ndarray, img2: np.ndarray,
         # 使用find_overlap_region计算重叠
         offset_y, confidence = find_overlap_region(img1, img2, search_ratio)
         
+        print(f"   🔍 重复率计算: offset_y={offset_y}, confidence={confidence:.3f}")
+        
         if offset_y is None or confidence < 0.3:
+            print(f"   ❌ 匹配失败: offset_y={offset_y}, confidence={confidence}")
             return 0.0
         
         # 计算重叠像素
         overlap_pixels = h1 - offset_y
+        print(f"   📐 重叠计算: h1={h1}, offset_y={offset_y} → overlap={overlap_pixels}px")
         
         if overlap_pixels <= 0:
+            print(f"   ❌ 负重叠: overlap_pixels={overlap_pixels}")
             return 0.0
         
-        # 计算重复率（相对于第二张图的高度）
-        overlap_ratio = overlap_pixels / h2
+        # 🔧 修正重复率计算：应该用较小的图作为基准
+        min_height = min(h1, h2)
+        overlap_ratio = overlap_pixels / min_height
+        
+        print(f"   📊 重复率: {overlap_pixels}/{min_height} = {overlap_ratio:.1%}")
         
         # 限制在0-1范围内
         return min(max(overlap_ratio, 0.0), 1.0)
@@ -1039,9 +1121,10 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
                          filter_duplicates: bool = True,
                          duplicate_high_threshold: float = 0.6,
                          duplicate_low_threshold: float = 0.2,
-                         duplicate_identical_threshold: float = 0.95) -> Image.Image:
+                         duplicate_identical_threshold: float = 0.95,
+                         scroll_distances: List[int] = None) -> Image.Image:
     """
-    智能垂直拼接图片，使用特征点匹配自动识别重叠区域
+    智能垂直拼接图片，使用特征点匹配自动识别重叠区域（支持滚动距离辅助）
     
     Args:
         images: 图片列表（PIL Image或numpy数组）
@@ -1055,6 +1138,7 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
         duplicate_high_threshold: 连续两图的高重复率阈值（默认0.6，即60%）
         duplicate_low_threshold: 隔一图的低重复率阈值（默认0.2，即20%）
         duplicate_identical_threshold: 完全重复阈值（默认0.95，即95%，允许连续跳过）
+        scroll_distances: 🆕 滚动距离列表（像素），用于初始估计，可选
         
     Returns:
         拼接后的PIL Image
@@ -1084,6 +1168,14 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
     print(f"   算法: ORB特征点匹配 + RANSAC")
     print(f"   策略: {strategy.upper()}")
     print(f"   参数: min_confidence={min_confidence}, blend={blend}")
+    
+    # 🆕 显示滚动距离信息
+    if scroll_distances and len(scroll_distances) > 0:
+        print(f"   🆕 滚动距离辅助: 启用 ({len(scroll_distances)} 个距离记录)")
+        print(f"      总滚动距离: {sum(scroll_distances)}px, 平均: {sum(scroll_distances)/len(scroll_distances):.1f}px/次")
+    else:
+        print(f"   滚动距离辅助: 未启用 (纯图像匹配模式)")
+    
     if filter_duplicates:
         print(f"   重复过滤: 启用 (连续>{duplicate_high_threshold*100:.0f}% 且隔一>{duplicate_low_threshold*100:.0f}%, 完全重复>{duplicate_identical_threshold*100:.0f}%)")
     print(f"{'='*60}")
@@ -1126,7 +1218,8 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
             overlap_ratio, 
             min_confidence, 
             blend, 
-            level=0
+            level=0,
+            scroll_distances=scroll_distances  # 🆕 传递滚动距离
         )
         print(f"\n{'='*60}")
         print(f"✅ 两两配对拼接完成!")
@@ -1139,7 +1232,8 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
             cv2_images,
             overlap_ratio,
             min_confidence,
-            blend
+            blend,
+            scroll_distances  # 🆕 传递滚动距离
         )
     
     # 转换回PIL Image
@@ -1149,9 +1243,10 @@ def smart_stitch_vertical(images: List[Union[Image.Image, np.ndarray]],
 def _sequential_stitch(cv2_images: List[np.ndarray],
                       overlap_ratio: float,
                       min_confidence: float,
-                      blend: bool) -> np.ndarray:
+                      blend: bool,
+                      scroll_distances: List[int] = None) -> np.ndarray:
     """
-    顺序累积拼接（原有逻辑）
+    顺序累积拼接(原有逻辑)
     
     第1次: img1 + img2 = result1
     第2次: result1 + img3 = result2
@@ -1162,10 +1257,11 @@ def _sequential_stitch(cv2_images: List[np.ndarray],
         cv2_images: OpenCV格式的图片列表
         overlap_ratio: 搜索范围比例
         min_confidence: 最小置信度
-        blend: 是否混合
+        blend: 是否启用羽化融合
+        scroll_distances: 每次截图之间的滚动距离(像素)
     
     Returns:
-        拼接后的OpenCV图像
+        拼接后的图像(OpenCV格式)
     """
     result = cv2_images[0].copy()
     success_count = 0
@@ -1178,8 +1274,11 @@ def _sequential_stitch(cv2_images: List[np.ndarray],
         h1, w1 = result.shape[:2]
         h2, w2 = img2.shape[:2]
         
+        # 🆕 获取当前截图的滚动距离
+        scroll_distance = scroll_distances[i] if (scroll_distances and i < len(scroll_distances)) else None
+        
         # 使用特征点匹配查找重叠
-        offset_y, confidence = find_overlap_region(result, img2, overlap_ratio)
+        offset_y, confidence = find_overlap_region(result, img2, overlap_ratio, scroll_distance=scroll_distance)
         
         # 判断是否使用智能拼接
         if offset_y is not None and confidence >= min_confidence:
@@ -1385,11 +1484,13 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
                filter_duplicates: bool = True,
                duplicate_high_threshold: float = 0.6,
                duplicate_low_threshold: float = 0.2,
-               duplicate_identical_threshold: float = 0.95) -> Image.Image:
+               duplicate_identical_threshold: float = 0.95,
+               scroll_distances: List[int] = None) -> Image.Image:
     """
-    自动拼接图片（智能或简单模式）
+    自动拼接图片（智能或简单模式）- 支持滚动距离辅助
     
     升级说明:
+      - 🆕 支持滚动距离辅助（混合方案：物理坐标 + 图像匹配）
       - 现在使用ORB特征点匹配（之前是模板匹配）
       - 不再需要预估重叠比例（overlap_ratio仅用于搜索范围）
       - 置信度默认降低到0.5（特征匹配更可靠）
@@ -1409,6 +1510,7 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
         duplicate_high_threshold: 连续两图的高重复率阈值（默认0.6，即60%）
         duplicate_low_threshold: 隔一图的低重复率阈值（默认0.2，即20%）
         duplicate_identical_threshold: 完全重复阈值（默认0.95，即95%，允许连续跳过）
+        scroll_distances: 🆕 滚动距离列表（像素），用于初始估计，可选
         
     Returns:
         拼接后的PIL Image
@@ -1435,7 +1537,8 @@ def auto_stitch(images: List[Union[Image.Image, np.ndarray, str, Path]],
                 filter_duplicates=filter_duplicates,
                 duplicate_high_threshold=duplicate_high_threshold,
                 duplicate_low_threshold=duplicate_low_threshold,
-                duplicate_identical_threshold=duplicate_identical_threshold
+                duplicate_identical_threshold=duplicate_identical_threshold,
+                scroll_distances=scroll_distances  # 🆕 传递滚动距离
             )
         except Exception as e:
             print(f"⚠️ 智能拼接失败: {e}")
