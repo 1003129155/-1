@@ -1121,6 +1121,30 @@ class Slabel(QLabel):  # 区域截图功能
         self.on_init = True
         self.closed = False  # QPainter安全标记
         self.mode = mode
+        
+        # 修复连续截图时遮罩层叠加问题：先清理旧的层
+        if hasattr(self, 'paintlayer') and self.paintlayer:
+            try:
+                self.paintlayer.clear()
+                self.paintlayer.deleteLater()
+            except:
+                pass
+        
+        if hasattr(self, 'mask') and self.mask:
+            try:
+                self.mask.hide()
+                self.mask.deleteLater()
+            except:
+                pass
+        
+        if hasattr(self, 'text_box') and self.text_box:
+            try:
+                self.text_box.hide()
+                self.text_box.deleteLater()
+            except:
+                pass
+        
+        # 创建新的层
         self.paintlayer = PaintLayer(self)  # 绘图层
         self.mask = MaskLayer(self)  # 遮罩层
         self.text_box = AutotextEdit(self)  # 文字工具类
@@ -1134,7 +1158,10 @@ class Slabel(QLabel):  # 区域截图功能
             self.setWindowFlags(Qt.FramelessWindowHint)
         else:
             self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)  # Sheet
-            
+        
+        # 强制刷新DPI和屏幕信息，防止使用缓存的错误数据
+        QApplication.processEvents()
+        
         # 预先隐藏窗口，避免显示过程中的跳动
         self.hide()
         self.setWindowOpacity(0)  # 先设为透明
@@ -3155,6 +3182,10 @@ class Slabel(QLabel):  # 区域截图功能
         self.sshoting = True
         t1 = time.process_time()
         
+        # 关键修复1: 强制刷新Qt屏幕信息，避免使用过期的缓存数据
+        QApplication.processEvents()
+        QApplication.instance().sync()  # 同步所有待处理的窗口系统事件
+        
         # 修复DPI缩放问题：不使用设备像素比率，确保1:1显示
         # pixRat = QWindow().devicePixelRatio()  # 注释掉这行，避免DPI缩放
         
@@ -3163,6 +3194,10 @@ class Slabel(QLabel):  # 区域截图功能
             self.init_parameters()
         else:
             self.setup(mode)  # 初始化截屏
+            
+            # 关键修复2: 在截图前清除所有可能影响的窗口几何缓存
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)  # Qt最大尺寸
             
             # 修改：现在截取所有显示器而不是单个显示器
             get_pix = self.capture_all_screens()
@@ -3178,7 +3213,7 @@ class Slabel(QLabel):  # 区域截图功能
         painter.end()  # 一定要end
         self.originalPix = pixmap.copy()
         
-        # 关键修复：确保QLabel图像显示属性正确，避免DPI缩放
+        # 关键修复3: 确保QLabel图像显示属性正确，避免DPI缩放和自动缩放
         self.setScaledContents(False)  # 禁用自动缩放，保持原始尺寸1:1显示
         self.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 确保图像从左上角开始显示
         
@@ -3201,17 +3236,35 @@ class Slabel(QLabel):  # 区域截图功能
         if multi_screen:
             # 多显示器：使用 capture_all_screens 生成的几何
             _debug_print(f"多显示器模式：偏移({self.virtual_desktop_offset_x},{self.virtual_desktop_offset_y}) 尺寸={self.virtual_desktop_width}x{self.virtual_desktop_height}")
-            # 先锁定大小，避免 QLabel 根据内容再次回缩
-            self.setMinimumSize(self.virtual_desktop_width, self.virtual_desktop_height)
-            self.setMaximumSize(self.virtual_desktop_width, self.virtual_desktop_height)
-            self.move(self.virtual_desktop_min_x, self.virtual_desktop_min_y)
-            self.resize(self.virtual_desktop_width, self.virtual_desktop_height)
+            
+            # 关键修复4: 使用更稳定的窗口设置顺序
+            # 先设置几何位置和大小
+            self.setGeometry(
+                self.virtual_desktop_min_x, 
+                self.virtual_desktop_min_y,
+                self.virtual_desktop_width, 
+                self.virtual_desktop_height
+            )
+            
+            # 然后锁定大小，避免 QLabel 根据内容再次回缩
+            self.setFixedSize(self.virtual_desktop_width, self.virtual_desktop_height)
+            
+            # 处理待处理事件
             QApplication.processEvents()
-            self.show()
+            
+            # 显示窗口
+            self.showNormal()  # 使用showNormal而不是show，确保不是最小化状态
             self.raise_()
+            self.activateWindow()
+            
+            # 再次处理事件
             QApplication.processEvents()
+            
+            # 验证几何是否正确
             g2 = self.geometry()
             _debug_print(f"初次显示几何: pos=({g2.x()},{g2.y()}) size={g2.width()}x{g2.height()}")
+            
+            # 如果几何不匹配，使用Win32 API强制设置
             if g2.width() != self.virtual_desktop_width or g2.height() != self.virtual_desktop_height:
                 _debug_print(f"初次几何不匹配，尝试Win32强制设置 {g2.width()}x{g2.height()} -> {self.virtual_desktop_width}x{self.virtual_desktop_height}")
                 try:
@@ -3229,6 +3282,9 @@ class Slabel(QLabel):  # 区域截图功能
                 except Exception as e:
                     _debug_print(f"Win32 SetWindowPos 失败: {e}")
         else:
+            # 关键修复5: 单显示器模式也要清除尺寸限制
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
             self.showFullScreen()
             _debug_print("单显示器模式：全屏显示")
         
@@ -3598,24 +3654,29 @@ class Slabel(QLabel):  # 区域截图功能
             # 获取所有截图
             screenshots = self.scroll_capture_window.get_screenshots()
             
+            # 🆕 获取滚动距离信息（用于混合拼接方案）
+            scroll_distances = self.scroll_capture_window.get_scroll_distances()
+            
             if not screenshots or len(screenshots) == 0:
                 QMessageBox.warning(None, "警告", "スクリーンショットが撮影されませんでした。")
                 self._cleanup_long_screenshot()
                 return
             
             print(f"🖼️ 共有 {len(screenshots)} 张截图，开始拼接...")
+            print(f"📏 滚动距离记录: {scroll_distances}")
             
-            # 使用升级后的智能拼接（ORB特征点匹配）
+            # 使用升级后的智能拼接（ORB特征点匹配 + 滚动距离辅助）
             used_fallback = False  # 标记是否使用了备用拼接方案
             try:
-                print("🤖 使用智能拼接（ORB特征点匹配 + RANSAC + 重复过滤）...")
+                print("🤖 使用混合拼接（滚动距离 + ORB特征点匹配微调 + RANSAC）...")
                 result_image = auto_stitch(
                     screenshots,
                     mode='smart',
                     min_confidence=0.5,  # 使用推荐的0.5阈值
                     filter_duplicates=True,  # 启用重复过滤
                     duplicate_high_threshold=0.6,  # 连续两图重复率>60%
-                    duplicate_low_threshold=0.2  # 隔一图重复率>20%
+                    duplicate_low_threshold=0.2,  # 隔一图重复率>20%
+                    scroll_distances=scroll_distances  # 🆕 传入滚动距离作为初始估计
                 )
                 print("✅ 智能拼接完成")
             except Exception as e:
