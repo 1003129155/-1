@@ -25,6 +25,7 @@ import sys
 import os
 import gc
 import time
+import threading
 from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -443,21 +444,46 @@ class TaskbarButton(QWidget):
             Qt.FramelessWindowHint  # 无边框
         )
         
-        # 设置窗口大小和样式
-        self.setFixedSize(60, 60)
+        # 设置窗口大小和样式（支持DPI缩放）
+        self._setup_dpi_aware_size()
         self.setup_ui()
         
         # 定位到屏幕左下角
         self.position_at_taskbar()
+    
+    def _setup_dpi_aware_size(self):
+        """设置支持DPI缩放的窗口大小"""
+        try:
+            # 获取当前屏幕的DPI比例
+            screen = QApplication.primaryScreen()
+            logical_dpi = screen.logicalDotsPerInch()
+            dpi_ratio = logical_dpi / 96.0
+            dpi_ratio = max(0.5, min(dpi_ratio, 3.0))  # 限制范围
+            
+            # 基础大小（100%缩放下）- 调整为更小的尺寸
+            base_size = 48
+            
+            # 应用DPI缩放
+            scaled_size = int(base_size * dpi_ratio)
+            
+            self.setFixedSize(scaled_size, scaled_size)
+            self._button_size = int(40 * dpi_ratio)  # 保存按钮大小供后续使用
+            
+            print(f"任务栏按钮DPI适配: {scaled_size}x{scaled_size} (DPI比例: {dpi_ratio:.2f})")
+        except Exception as e:
+            print(f"任务栏按钮DPI适配失败: {e}")
+            self.setFixedSize(60, 60)
+            self._button_size = 50
         
     def setup_ui(self):
         """设置界面"""
         layout = QVBoxLayout()
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(4, 4, 4, 4)  # 减小边距让按钮更紧凑
         
         # 创建按钮
         self.btn = QPushButton()
-        self.btn.setFixedSize(50, 50)
+        button_size = getattr(self, '_button_size', 50)
+        self.btn.setFixedSize(button_size, button_size)
         self.btn.setIcon(create_app_icon())
         self.btn.setIconSize(self.btn.size())
         self.btn.clicked.connect(self.clicked.emit)
@@ -485,15 +511,19 @@ class TaskbarButton(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         
     def position_at_taskbar(self):
-        """定位到任务栏左侧"""
+        """定位到任务栏左侧，确保不被任务栏遮挡"""
         from PyQt5.QtWidgets import QApplication
         screen = QApplication.primaryScreen().geometry()
         
         # 定位到左下角，留出任务栏空间
         x = 10  # 距离左边10像素
-        y = screen.height() - 100  # 距离底部100像素（留出任务栏空间）
+        
+        # 设置最低Y坐标，防止被任务栏挡住（距离底部至少125像素）
+        min_y_from_bottom = 125  # 任务栏预留空间
+        y = screen.height() - min_y_from_bottom
         
         self.move(x, y)
+        print(f"任务栏按钮定位: ({x}, {y}) 屏幕尺寸: {screen.width()}x{screen.height()}")
     
     def mousePressEvent(self, event):
         """鼠标按下事件 - 右键拖动窗口"""
@@ -504,9 +534,29 @@ class TaskbarButton(QWidget):
             super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
-        """鼠标移动事件 - 右键拖动窗口"""
+        """鼠标移动事件 - 右键拖动窗口，支持多显示器，只限制Y坐标防止被任务栏遮挡"""
         if event.buttons() == Qt.RightButton and hasattr(self, 'drag_position'):
-            self.move(event.globalPos() - self.drag_position)
+            new_pos = event.globalPos() - self.drag_position
+            
+            # 获取鼠标所在的显示器
+            current_screen = QApplication.screenAt(event.globalPos())
+            if current_screen is None:
+                current_screen = QApplication.primaryScreen()
+            
+            screen_rect = current_screen.geometry()
+            
+            # X坐标不限制，允许跨显示器移动
+            x = new_pos.x()
+            
+            # 只限制Y坐标，防止被任务栏遮挡
+            min_y_from_bottom = 125  # 任务栏预留空间
+            max_y = screen_rect.bottom() - min_y_from_bottom + 1  # +1是因为bottom()返回的是包含边界
+            
+            # Y坐标限制：不能超出当前屏幕顶部，不能太接近底部
+            y = max(screen_rect.top(), min(new_pos.y(), max_y))
+            
+            # 应用位置
+            self.move(x, y)
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -662,30 +712,115 @@ class MainWindow(QMainWindow):
 
         # 标记程序是否真正退出
         self.really_quit = False
+
+        # 程序启动后做一次“长截图”相关的轻量预热，避免首次点击时卡顿
+        self._schedule_long_screenshot_warm_up()
+
+    def _schedule_long_screenshot_warm_up(self):
+        """异步预热长截图所需的重资源，减少首次点击卡顿。
+
+        预热内容：
+        - 后台线程导入 pynput 并启动/停止一次 Listener（初始化底层钩子）
+        - 后台线程触发 Pillow 的基本路径（Image.new + tobytes）
+        - UI 线程做一次极小区域的屏幕抓取，初始化 Qt 截屏通道
+        """
+        try:
+            # 后台模块预热：避免阻塞UI
+            def _bg_warmup():
+                try:
+                    from pynput import mouse
+                    # 启停一次监听器，完成底层钩子初始化
+                    l = mouse.Listener(on_scroll=lambda *a, **k: None)
+                    l.start()
+                    l.stop()
+                except Exception as e:
+                    print(f"[warmup] 跳过pynput预热: {e}")
+
+                try:
+                    from PIL import Image as _PILImage
+                    _ = _PILImage.new('RGB', (1, 1)).tobytes()
+                except Exception as e:
+                    print(f"[warmup] 跳过Pillow预热: {e}")
+
+            threading.Thread(target=_bg_warmup, daemon=True).start()
+
+            # UI线程预热：做一次1x1像素抓取，初始化Qt截图路径
+            def _ui_warmup():
+                try:
+                    screen = QApplication.primaryScreen()
+                    if screen is not None:
+                        # 一些平台上宽或高为0会失败，使用 1x1
+                        _ = screen.grabWindow(0, 0, 0, 1, 1)
+                except Exception as e:
+                    print(f"[warmup] 跳过Qt抓取预热: {e}")
+
+            QTimer.singleShot(800, _ui_warmup)
+        except Exception as e:
+            print(f"[warmup] 预热调度失败: {e}")
     
     def _setup_window_monitor(self):
         """设置窗口状态监控，防止窗口状态异常"""
+        # 记录初始显示器配置
+        self._last_screen_count = len(QApplication.screens())
+        self._last_primary_screen_geometry = QApplication.primaryScreen().geometry()
+        self._last_dpi_ratio = self._get_current_screen_dpi_ratio(QApplication.primaryScreen())
+        
         self.window_monitor_timer = QTimer()
         self.window_monitor_timer.timeout.connect(self._check_window_state)
-        self.window_monitor_timer.start(30000)  # 30秒检查一次
+        self.window_monitor_timer.start(5000)  # 5秒检查一次（更频繁以快速响应显示器变化）
         print("🔍 [DEBUG] 窗口状态监控已启动")
     
     def _check_window_state(self):
-        """检查窗口状态，自动修复异常"""
+        """检查窗口状态，自动修复异常，包括显示器配置变化"""
         try:
+            # 检查显示器配置是否发生变化
+            current_screen_count = len(QApplication.screens())
+            current_primary_screen_geometry = QApplication.primaryScreen().geometry()
+            current_dpi_ratio = self._get_current_screen_dpi_ratio(QApplication.primaryScreen())
+            
+            # 检测到显示器配置变化
+            screen_config_changed = (
+                current_screen_count != self._last_screen_count or
+                current_primary_screen_geometry != self._last_primary_screen_geometry or
+                abs(current_dpi_ratio - self._last_dpi_ratio) > 0.1  # DPI变化超过10%
+            )
+            
+            if screen_config_changed:
+                print("🔍 [MONITOR] 检测到显示器配置变化，重新调整窗口大小...")
+                print(f"   屏幕数量: {self._last_screen_count} -> {current_screen_count}")
+                print(f"   主屏几何: {self._last_primary_screen_geometry} -> {current_primary_screen_geometry}")
+                print(f"   DPI比例: {self._last_dpi_ratio:.2f} -> {current_dpi_ratio:.2f}")
+                
+                # 重新设置窗口大小以适应新的显示器配置
+                self._setup_window_size()
+                
+                # 重新定位任务栏按钮（如果存在）
+                if hasattr(self, 'taskbar_button') and self.taskbar_button and self.taskbar_button.isVisible():
+                    self.taskbar_button.position_at_taskbar()
+                
+                # 更新记录
+                self._last_screen_count = current_screen_count
+                self._last_primary_screen_geometry = current_primary_screen_geometry
+                self._last_dpi_ratio = current_dpi_ratio
+            
             # 检查窗口是否意外变透明
             if self.windowOpacity() < 0.5:
                 print("⚠️ [WARN] 检测到窗口透明度异常，正在修复...")
                 self.setWindowOpacity(1)
             
-            # 检查窗口是否在屏幕外
-            screen_geometry = QApplication.desktop().screenGeometry()
-            if (self.x() < -self.width() or self.y() < -self.height() or 
-                self.x() > screen_geometry.width() + self.width() or 
-                self.y() > screen_geometry.height() + self.height()):
+            # 检查窗口是否在所有屏幕外（支持多显示器）
+            all_screens_geometry = QRect()
+            for screen in QApplication.screens():
+                all_screens_geometry = all_screens_geometry.united(screen.geometry())
+            
+            window_center_x = self.x() + self.width() // 2
+            window_center_y = self.y() + self.height() // 2
+            
+            if not all_screens_geometry.contains(window_center_x, window_center_y):
                 print("⚠️ [WARN] 检测到窗口位置异常，正在修复...")
-                center_x = (screen_geometry.width() - self.width()) // 2
-                center_y = (screen_geometry.height() - self.height()) // 2
+                primary_geometry = QApplication.primaryScreen().geometry()
+                center_x = primary_geometry.x() + (primary_geometry.width() - self.width()) // 2
+                center_y = primary_geometry.y() + (primary_geometry.height() - self.height()) // 2
                 self.move(center_x, center_y)
                 
         except Exception as e:
@@ -778,29 +913,65 @@ class MainWindow(QMainWindow):
         self._setup_window_size()
 
     def _setup_window_size(self):
-        """设置窗口大小"""
+        """设置窗口大小 - 支持DPI缩放适配"""
         try:
             app = QApplication.instance()
-            screen = app.desktop().screenGeometry()
             
-            # 使用原始的固定大小
-            width = 220
-            height = 120
+            # 获取当前主显示器
+            primary_screen = app.primaryScreen()
+            screen_geometry = primary_screen.geometry()
+            
+            # 获取DPI缩放比例
+            dpi_ratio = self._get_current_screen_dpi_ratio(primary_screen)
+            
+            # 基础尺寸（在100% DPI下的理想大小）- 调整为更小的尺寸
+            base_width = 180
+            base_height = 100
+            base_min_width = 260
+            base_min_height = 200
+            base_max_width = 480
+            base_max_height = 360
+            
+            # 应用DPI缩放
+            width = int(base_width * dpi_ratio)
+            height = int(base_height * dpi_ratio)
+            min_width = int(base_min_width * dpi_ratio)
+            min_height = int(base_min_height * dpi_ratio)
+            max_width = int(base_max_width * dpi_ratio)
+            max_height = int(base_max_height * dpi_ratio)
 
-            x = (screen.width() - width) // 2
-            y = (screen.height() - height) // 2
+            # 居中定位
+            x = (screen_geometry.width() - width) // 2
+            y = (screen_geometry.height() - height) // 2
             
             self.setGeometry(x, y, width, height)
-            self.setMinimumSize(320, 260)
-            self.setMaximumSize(600, 450)
+            self.setMinimumSize(min_width, min_height)
+            self.setMaximumSize(max_width, max_height)
 
-            print(f"窗口大小已设置: {width}x{height}")
+            print(f"窗口大小已设置: {width}x{height} (DPI缩放: {dpi_ratio:.2f})")
             
         except Exception as e:
             print(f"设置窗口大小时出错: {e}")
+            # 回退到固定大小
             self.setGeometry(300, 300, 400, 320)
             self.setMinimumSize(400, 320)
             self.setMaximumSize(520, 416)
+    
+    def _get_current_screen_dpi_ratio(self, screen):
+        """获取当前屏幕的DPI缩放比例"""
+        try:
+            # 获取逻辑DPI
+            logical_dpi = screen.logicalDotsPerInch()
+            # 标准DPI是96
+            dpi_ratio = logical_dpi / 96.0
+            
+            # 限制缩放比例在合理范围内
+            dpi_ratio = max(0.5, min(dpi_ratio, 3.0))
+            
+            return dpi_ratio
+        except Exception as e:
+            print(f"获取DPI比例失败: {e}")
+            return 1.0  # 默认不缩放
 
     def _setup_ui(self):
         """设置用户界面"""
@@ -949,7 +1120,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.01 | 更新日: 2025.11/2")
+        self.version_label = QLabel("バージョン: 1.03 | 更新日: 2025.11/13")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
@@ -1019,11 +1190,24 @@ class MainWindow(QMainWindow):
         print("开始截图...")
         self.status_label.setText("スクリーンショット中...")
         
+        # 关闭所有打开的对话框（包括设置对话框）
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget.isVisible():
+                print(f"🔍 [截图准备] 发现打开的对话框，正在关闭: {widget.windowTitle()}")
+                widget.close()
+        
         # 安全地隐藏主窗口 - 使用hide()而不是透明度和移动
         self._was_visible = self.isVisible()  # 记录原始可见状态
         if self._was_visible:
             self.temppos = [self.x(), self.y()]  # 保存位置
             self.hide()  # 简单隐藏，不使用透明度
+        
+        # 隐藏任务栏按钮（如果存在）
+        self._taskbar_button_was_visible = False
+        if hasattr(self, 'taskbar_button') and self.taskbar_button and self.taskbar_button.isVisible():
+            self._taskbar_button_was_visible = True
+            self.taskbar_button.hide()
+            print("✅ 任务栏按钮已隐藏用于截图")
         
         # 延迟一小段时间确保窗口完全隐藏
         QTimer.singleShot(50, self._do_screenshot)
@@ -1038,6 +1222,13 @@ class MainWindow(QMainWindow):
         """截图结束处理"""
         print("截图结束")
         self.status_label.setText("待機中")
+        
+        # 恢复任务栏按钮（如果之前是显示的）
+        if hasattr(self, '_taskbar_button_was_visible') and self._taskbar_button_was_visible:
+            if hasattr(self, 'taskbar_button') and self.taskbar_button:
+                self.taskbar_button.show()
+                print("✅ 任务栏按钮已恢复显示")
+            self._taskbar_button_was_visible = False  # 重置标志
         
         # 检查是否刚刚创建了钉图窗口
         just_created_pin = getattr(self, '_just_created_pin_window', False)
