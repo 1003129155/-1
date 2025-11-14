@@ -791,6 +791,10 @@ class MainWindow(QMainWindow):
                 print(f"   主屏几何: {self._last_primary_screen_geometry} -> {current_primary_screen_geometry}")
                 print(f"   DPI比例: {self._last_dpi_ratio:.2f} -> {current_dpi_ratio:.2f}")
                 
+                # 通知截图模块刷新屏幕缓存
+                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
+                    self.screenshot_widget.refresh_screen_cache()
+                
                 # 重新设置窗口大小以适应新的显示器配置
                 self._setup_window_size()
                 
