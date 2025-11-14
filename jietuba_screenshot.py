@@ -238,6 +238,17 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self._in_undo_operation = False  # 防止撤销操作冲突的标志
         self.on_init = False
 
+    def refresh_screen_cache(self):
+        """由主程序调用，强制刷新屏幕缓存（解决休眠后拔插显示器问题）"""
+        try:
+            print("🔄 [截图] 收到屏幕变化通知，刷新缓存...")
+            # 发送轻量级系统消息，让Qt重新检测屏幕
+            import ctypes
+            ctypes.windll.user32.SendMessageW(0xFFFF, 0x001A, 0, 0)
+            print("✅ [截图] 屏幕缓存已刷新")
+        except Exception as e:
+            print(f"⚠️ [截图] 刷新屏幕缓存失败: {e}")
+
     def init_parameters(self):  # 初始化参数
         self.NpainterNmoveFlag = self.choicing = self.move_rect = self.move_y0 = self.move_x0 = self.move_x1 \
             = self.change_alpha = self.move_y1 = False
@@ -1290,6 +1301,32 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 最后恢复完全可见，这样可以避免跳动
         self.setWindowOpacity(1)
         
+        # 确保窗口获得焦点
+        self.setFocus(Qt.ActiveWindowFocusReason)
+        self.activateWindow()
+        self.raise_()
+        
+        # Windows下使用系统API确保窗口激活
+        if PLATFORM_SYS == "win32":
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                hwnd = int(self.winId())
+                
+                # 获取前台窗口并附加线程输入
+                foreground_hwnd = user32.GetForegroundWindow()
+                if foreground_hwnd != hwnd:
+                    foreground_thread = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+                    current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+                    user32.AttachThreadInput(current_thread, foreground_thread, True)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.AttachThreadInput(current_thread, foreground_thread, False)
+                else:
+                    user32.SetForegroundWindow(hwnd)
+                user32.SetActiveWindow(hwnd)
+            except:
+                pass
+        
         if type(pix) is not QPixmap:
             # 初始化时，确保备份列表只包含初始状态
             self.backup_ssid = 0
@@ -1650,7 +1687,10 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 return
             
             print(f"🖼️ 共有 {len(screenshots)} 张截图，开始拼接...")
-            print(f"📏 滚动距离记录: {scroll_distances}")
+            if scroll_distances and len(scroll_distances) > 0:
+                print(f"📏 滚动距离记录: {scroll_distances}")
+            else:
+                print("📏 使用纯图像匹配方案（无滚动距离辅助）")
             
             # 使用升级后的智能拼接（ORB特征点匹配 + 滚动距离辅助）
             used_fallback = False  # 标记是否使用了备用拼接方案
@@ -1933,9 +1973,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 清除钉图创建标志
         self._creating_pinned_window = False
         
-        # 创建钉图窗口后不再强制显示主窗口，保持托盘状态
-        # if not QSettings('Fandes', 'jietuba').value("S_SIMPLE_MODE", False, bool):
-        #     self.parent.show()
+
         self.clear_and_hide()
 
     def is_alphabet(self, uchar):
@@ -2618,8 +2656,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         else:
                             self.update()  # 正常截图模式触发主窗口更新
                         
-                        # 注意：不要在这里立即clear()，让绘制逻辑自己处理清理
-                        # 文字绘制完成后会自动清理输入框和锚点信息
+
                         return
                     
                     # 重要：在创建新的文字输入框之前，确保完全重置状态
@@ -2794,46 +2831,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if not (1 in self.painter_tools.values()):
                 self.botton_box.hide()
             self.update()
-        # elif event.button() == Qt.RightButton:  # 右键
-        #     self.setCursor(Qt.ArrowCursor)
-        #     if 1 in self.painter_tools.values():  # 退出绘图工具
-        #         if self.painter_tools["selectcolor_on"]:
-        #             self.Tipsshower.setText("取消取色器")
-        #             self.choice_clor_btn.setStyleSheet(
-        #                 'background-color:{0};'.format(self.pencolor.name()))  # 还原choiceclor显示的颜色
-        #         if self.painter_tools["perspective_cut_on"] and len(self.perspective_cut_pointlist) > 0:
-        #             self.setCursor(QCursor(QPixmap(":/perspective.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
-        #             self.perspective_cut_pointlist.pop()
-        #             # if not len(self.perspective_cut_pointlist):
-        #             #     self.choicing = False
-        #             #     self.finding_rect = True
-        #         elif self.painter_tools["polygon_ss_on"] and len(self.polygon_ss_pointlist) > 0:
-        #             self.setCursor(QCursor(QPixmap(":/polygon_ss.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
-        #             self.polygon_ss_pointlist.pop()
-        #             # if not len(self.polygon_ss_pointlist):
-        #             #     self.choicing = False
-        #             #     self.finding_rect = True
-        #         else:
-        #             self.choicing = False
-        #             self.finding_rect = True
-        #             self.shower.hide()
-        #             self.change_tools_fun("")
 
-        #     elif self.choicing:  # 退出选定的选区
-        #         self.botton_box.hide()
-        #         self.choicing = False
-        #         self.finding_rect = True
-        #         self.shower.hide()
-        #         self.x0 = self.y0 = self.x1 = self.y1 = -50
-        #     else:  # 退出截屏
-        #         try:
-        #             if not QSettings('Fandes', 'jamtools').value("S_SIMPLE_MODE", False, bool):
-        #                 self.parent.show()
-
-        #             self.parent.bdocr = False
-        #         except:
-        #             print(sys.exc_info(), 2051)
-        #         self.clear_and_hide()
             self.update()
             
             # 如果是钉图模式，也需要更新钉图窗口
@@ -2940,8 +2938,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     else:
                         print(f"圆形撤销调试: 移动距离太小，不进行备份")
                 elif self.painter_tools['drawtext_on']:
-                    # 文字工具：这里不进行备份，因为文字还没有确认输入
-                    # 文字的备份会在PaintLayer的paintEvent中，确认有文字内容时进行
+
                     print(f"文字撤销调试: 文字工具点击，等待文字输入确认")
                     should_backup = False
                 
@@ -3001,7 +2998,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self._cancel_selection()
                 return
             
-            # 无论当前处于什么状态，右键都直接退出截图（与ESC行为一致）
+
             try:
                 if not QSettings('Fandes', 'jietuba').value("S_SIMPLE_MODE", False, bool):
                     # 检查主窗口截图前的可见状态，只有原本可见才显示
@@ -3389,9 +3386,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             print(f"⚠️ 清理pixPainter时出错: {e}")
             
         try:
-            # OCR freezer清理已移除
-            # if self.ocr_freezer is not None:
-            #     self.ocr_freezer.clear()
+
             pass
         except Exception as e:
             print(f"⚠️ 清理OCR freezer时出错: {e}")
