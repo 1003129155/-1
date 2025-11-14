@@ -6,7 +6,7 @@ jietuba_paint_layer.py - 绘画层模块
 - PaintLayer: 绘画层，处理所有绘图操作（画笔、箭头、矩形、圆形、文字等）
 - get_line_interpolation: 笔迹插值函数
 
-从 jietuba_screenshot.py 拆分而来，降低单文件复杂度
+ 
 """
 import math
 import cv2
@@ -127,7 +127,7 @@ class MaskLayer(QLabel):
             painter.drawRect(QRect(enlarge_box_x, enlarge_box_y - 60, 160, 60))
             painter.setBrush(Qt.NoBrush)
 
-            # 安全获取像素颜色 - 修复负坐标问题
+            # 安全获取像素颜色
             color = QColor(255, 255, 255)
             mouse_x = self.parent.mouse_posx
             mouse_y = self.parent.mouse_posy
