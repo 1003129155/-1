@@ -166,7 +166,7 @@ class ScrollCaptureWindow(QWidget):
             # 确保窗口在目标显示器的范围内
             # 检查窗口是否会超出显示器边界
             window_width = self.capture_rect.width() + border_width * 2
-            window_height = self.capture_rect.height() + border_width * 2 + 50  # +50为按钮栏高度
+            window_height = self.capture_rect.height() + border_width * 2 + 35  # +35为按钮栏高度（从50改为35）
             
             # 如果有父窗口的adjust_position_to_screen方法，直接使用它（与钉图窗口完全一致）
             if (hasattr(self, 'parent') and self.parent and 
@@ -221,7 +221,7 @@ class ScrollCaptureWindow(QWidget):
         
         # 设置窗口位置和大小（基于截图区域）
         # 窗口区域 = 截图区域 + 底部按钮栏
-        button_bar_height = 50
+        button_bar_height = 35  # 从50改为35，让按钮栏更窄
         
         # 为边框预留空间（但截图区域不包含边框）
         border_width = 3
@@ -255,25 +255,25 @@ class ScrollCaptureWindow(QWidget):
         button_bar.setStyleSheet("""
             QWidget {
                 background-color: rgba(40, 40, 40, 200);
-                border: 2px solid #555;
-                border-radius: 5px;
+                border: 1px solid #555;
+                border-radius: 3px;
             }
         """)
-        button_bar.setFixedHeight(50)  # 恢复原来的高度
+        button_bar.setFixedHeight(35)  # 从50改为35，让按钮栏更窄
         
         button_layout = QHBoxLayout(button_bar)  # 改回水平布局
-        button_layout.setContentsMargins(10, 5, 10, 5)
+        button_layout.setContentsMargins(8, 3, 8, 3)  # 减小边距，从(10,5,10,5)改为(8,3,8,3)
         
         # 提示文字标签（放在左侧）
         tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
-        tip_label.setStyleSheet("color: #FFD700; font-size: 9pt; font-weight: bold;")
+        tip_label.setStyleSheet("color: #FFD700; font-size: 8pt; font-weight: bold;")  # 字体从9pt改为8pt
         button_layout.addWidget(tip_label)
         
         button_layout.addStretch()
         
         # 截图计数标签
         self.count_label = QLabel("スクショ: 0 枚")
-        self.count_label.setStyleSheet("color: white; font-size: 11pt;")
+        self.count_label.setStyleSheet("color: white; font-size: 9pt;")  # 字体从11pt改为9pt
         button_layout.addWidget(self.count_label)
         
         # 完成按钮
@@ -283,10 +283,11 @@ class ScrollCaptureWindow(QWidget):
                 background-color: #4CAF50;
                 color: white;
                 border: none;
-                padding: 8px 20px;
-                font-size: 11pt;
-                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 9pt;
+                border-radius: 3px;
                 font-weight: bold;
+                min-width: 40px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -302,9 +303,10 @@ class ScrollCaptureWindow(QWidget):
                 background-color: #f44336;
                 color: white;
                 border: none;
-                padding: 8px 20px;
-                font-size: 11pt;
-                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 9pt;
+                border-radius: 3px;
+                min-width: 60px;
             }
             QPushButton:hover {
                 background-color: #da190b;

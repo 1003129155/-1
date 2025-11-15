@@ -246,41 +246,88 @@ class Finder:
         
         def enum_windows_callback(hwnd, _):
             """枚举窗口回调函数"""
-            # 只处理可见窗口
-            if not win32gui.IsWindowVisible(hwnd):
-                return True
-            
-            # 跳过没有标题的窗口（通常是系统窗口）
-            title = win32gui.GetWindowText(hwnd)
-            if not title:
-                return True
-            
-            # 获取窗口矩形
             try:
+                # 1. 只处理可见窗口
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                
+                # 2. 检查窗口样式（排除工具窗口、消息窗口等）
+                style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                
+                # 跳过没有标题栏的窗口（通常是弹出窗口或工具栏）
+                if not (style & win32con.WS_CAPTION):
+                    return True
+                
+                # 跳过工具窗口
+                if ex_style & win32con.WS_EX_TOOLWINDOW:
+                    return True
+                
+                # 3. 必须有窗口标题
+                title = win32gui.GetWindowText(hwnd)
+                if not title or len(title.strip()) == 0:
+                    return True
+                
+                # 4. 检查窗口是否真的可以接收输入（不是透明遮罩）
+                if ex_style & win32con.WS_EX_TRANSPARENT:
+                    return True
+                
+                # 5. 获取窗口矩形
                 rect = win32gui.GetWindowRect(hwnd)
                 x1, y1, x2, y2 = rect
                 
-                # 窗口太小的忽略
-                if (x2 - x1) < 20 or (y2 - y1) < 20:
+                # 6. 窗口必须有合理的大小（排除太小的窗口）
+                width = x2 - x1
+                height = y2 - y1
+                if width < 30 or height < 30:  # 提高最小尺寸阈值
                     return True
                 
-                # 转换为相对于截图区域的坐标
+                # 7. 窗口必须在屏幕可见区域内（至少部分可见）
+                # 排除完全在屏幕外的窗口
+                if x2 < -1000 or y2 < -1000 or x1 > 10000 or y1 > 10000:
+                    return True
+                
+                # 8. 检查窗口类名，排除一些特殊的系统窗口
+                try:
+                    class_name = win32gui.GetClassName(hwnd)
+                    # 排除一些已知的不需要选择的窗口类
+                    excluded_classes = [
+                        'Windows.UI.Core.CoreWindow',  # UWP后台窗口
+                        'ApplicationFrameWindow',      # UWP框架窗口（有时是空的）
+                        'WorkerW',                     # 桌面工作窗口
+                        'Progman',                     # 程序管理器
+                    ]
+                    if class_name in excluded_classes:
+                        return True
+                except Exception:
+                    pass
+                
+                # 9. 转换为相对于截图区域的坐标
                 x1 -= self.screen_offset_x
                 y1 -= self.screen_offset_y
                 x2 -= self.screen_offset_x
                 y2 -= self.screen_offset_y
                 
                 self.windows.append((hwnd, [x1, y1, x2, y2], title))
-            except Exception:
+                
+            except Exception as e:
+                # 静默处理异常，继续枚举下一个窗口
                 pass
             
             return True
         
         try:
             win32gui.EnumWindows(enum_windows_callback, None)
-            print(f'找到 {len(self.windows)} 个可见窗口')
+            print(f'🔍 [智能选区] 找到 {len(self.windows)} 个有效窗口')
+            
+            # 调试：输出前5个窗口信息
+            if DEBUG_MONITOR and self.windows:
+                print("📋 [智能选区] 检测到的窗口列表（前5个）:")
+                for i, (hwnd, rect, title) in enumerate(self.windows[:5]):
+                    print(f"  {i+1}. 标题: {title[:30]}, 大小: {rect[2]-rect[0]}x{rect[3]-rect[1]}, 位置: ({rect[0]}, {rect[1]})")
+                    
         except Exception as e:
-            print(f'枚举窗口失败: {e}')
+            print(f'❌ [智能选区] 枚举窗口失败: {e}')
             self.windows = []
 
     def find_targetrect(self, point):
@@ -288,19 +335,32 @@ class Finder:
         x, y = point
         target_rect = None
         min_area = float('inf')
+        found_window_title = None
         
+        # 查找所有包含该点的窗口
+        matching_windows = []
         for hwnd, rect, title in self.windows:
             x1, y1, x2, y2 = rect
             # 检查点是否在窗口内
             if x1 <= x <= x2 and y1 <= y <= y2:
                 area = (x2 - x1) * (y2 - y1)
-                # 找最小的包含窗口
-                if area < min_area:
-                    min_area = area
-                    target_rect = rect
+                matching_windows.append((hwnd, rect, title, area))
         
-        # 如果没找到窗口，返回全屏
+        # 如果找到多个窗口，选择最小的（最具体的）
+        if matching_windows:
+            # 按面积排序，选择最小的
+            matching_windows.sort(key=lambda w: w[3])
+            hwnd, target_rect, found_window_title, min_area = matching_windows[0]
+            
+            # 调试信息
+            if DEBUG_MONITOR:
+                print(f"🎯 [智能选区] 鼠标({x}, {y})处找到窗口: '{found_window_title[:30]}', 大小: {target_rect[2]-target_rect[0]}x{target_rect[3]-target_rect[1]}")
+                if len(matching_windows) > 1:
+                    print(f"   共有 {len(matching_windows)} 个重叠窗口，已选择最小的")
+        
+        # 如果没找到窗口，返回全屏（但输出警告）
         if target_rect is None:
+            print(f"⚠️ [智能选区] 在鼠标位置({x}, {y})未找到有效窗口，返回全屏")
             try:
                 w = self.parent.width()
                 h = self.parent.height()

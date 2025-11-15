@@ -2487,6 +2487,75 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 print(f"钉图模式: 重新确保文字框焦点，hasFocus={self.text_box.hasFocus()}")
         except Exception as e:
             print(f"确保文字框焦点时出错: {e}")
+    
+    def _handle_new_selection_start(self, x, y):
+        """
+        处理新选区开始的逻辑
+        智能选区模式：只记录位置，等待用户松开或拖动
+        手动选区模式：立即准备拖动
+        """
+        self.drag_started = False
+        self.rx0 = x
+        self.ry0 = y
+        
+        is_smart_mode = self.finding_rect and self.smartcursor_on
+        self.NpainterNmoveFlag = not is_smart_mode
+        
+        if is_smart_mode:
+            print("🖱️ [智能选区] 等待用户操作：松开=确认智能选区，拖动=切换手动")
+        else:
+            print("🖱️ [手动选区] 准备手动拖动")
+    
+    def _is_smart_selection_active(self):
+        """判断智能选区功能是否激活"""
+        return self.finding_rect and self.smartcursor_on
+    
+    def _should_confirm_smart_selection(self):
+        """判断是否应该确认智能选区（点击未拖动且智能选区开启）"""
+        return not self.drag_started and self._is_smart_selection_active()
+    
+    def _should_cancel_selection(self):
+        """判断是否应该取消选区（点击未拖动且不满足智能选区条件）"""
+        return not self.drag_started and self.NpainterNmoveFlag
+    
+    def _check_smart_to_manual_switch(self, x, y):
+        """
+        智能选区模式下，检测用户是否开始拖动
+        如果拖动超过阈值，则切换到手动拖动模式
+        """
+        distance = abs(x - self.rx0) + abs(y - self.ry0)
+        if distance > self.drag_threshold:
+            print("🖱️ [智能选区] 检测到拖动，切换到手动模式")
+            self.finding_rect = False
+            self.NpainterNmoveFlag = True
+            self.drag_started = False
+    
+    def _handle_manual_selection_drag(self, x, y):
+        """
+        手动选区模式：处理拖动创建选区
+        使用防抖逻辑，只有拖动超过阈值才开始创建选区
+        """
+        if not self.drag_started:
+            distance = abs(x - self.rx0) + abs(y - self.ry0)
+            if distance > self.drag_threshold:
+                self.drag_started = True
+                self.x0 = self.rx0
+                self.y0 = self.ry0
+                print("🖱️ [手动选区] 开始拖动")
+            else:
+                return  # 移动距离太小，暂时忽略
+        
+        # 更新终点和边界修正
+        self.x1 = x
+        self.y1 = y
+        if self.y1 > self.y0:
+            self.y1 += 1
+        else:
+            self.y0 += 1
+        if self.x1 > self.x0:
+            self.x1 += 1
+        else:
+            self.x0 += 1
 
     def mousePressEvent(self, event):
         # 如果是钉图模式并且有绘图工具激活，检查事件是否来自钉图窗口的委托
@@ -2759,22 +2828,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     self.bx = abs(max(self.x1, self.x0) - event.x())
                     self.by = abs(max(self.y1, self.y0) - event.y())
                 else:
-                    self.NpainterNmoveFlag = True  # 没有绘图没有移动还按下了左键,说明正在选区,标志变量
-                    self.drag_started = False  # 重置拖动状态
+                    # 点击了空白区域，准备创建新选区
+                    self._handle_new_selection_start(event.x(), event.y())
                     
-                    self.rx0 = event.x()  # 记录下点击位置
-                    self.ry0 = event.y()
-                    
-                    # 如果智能选区开启，暂时不重置选区坐标
-                    # 等待用户拖动或松开鼠标来决定是确认智能选区还是手动拖拽
-                    if not self.finding_rect:
-                        # 非智能选区模式：准备手动拖拽
-                        # x0, y0 will be set when drag starts (in mouseMoveEvent)
-                        pass
-                    # 注释掉立即设置x1,y1，改为在mouseMoveEvent中根据拖动距离判断
-                    # if self.x1 == -50:
-                    #     self.x1 = event.x()
-                    #     self.y1 = event.y()
                 if r:  # 判断是否点击在了对角线上
                     if (self.y0 - 8 < event.y() < self.y0 + 8) and (
                             x0 - 8 < event.x() < x1 + 8):
@@ -2811,7 +2867,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 return  # 如果不是委托事件，直接返回
         
         if event.button() == Qt.LeftButton:
-            # 选区编辑结束 -> 提交
+            # 1. 处理选区编辑结束
             if getattr(self, 'selection_active', False) and (self.selection_dragging or self.selection_resize_edge):
                 self.selection_dragging = False
                 self.selection_resize_edge = None
@@ -2819,14 +2875,21 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self._commit_selection()
                 return
             
-            # 智能选区确认：如果用户点击但没有拖动，且智能选区模式开启，则确认智能选区
-            if not self.drag_started and self.finding_rect:
-                print("🎯 [选区] 点击未拖动，确认智能选区")
-                self.finding_rect = False  # 关闭智能选区模式
-                self.choice()  # 确认选区并显示工具栏
-                self.drag_started = False  # 重置拖动标志
+            # 2. 智能选区确认：点击未拖动 + 智能选区开启
+            if self._should_confirm_smart_selection():
+                print("🎯 [智能选区] 确认选区")
+                self.finding_rect = False
+                self.choice()
                 return
             
+            # 3. 取消操作：点击未拖动 + 不满足智能选区条件
+            if self._should_cancel_selection():
+                print("🎯 [手动选区] 取消操作（未拖动）")
+                self.NpainterNmoveFlag = False
+                self.left_button_push = False
+                return
+            
+            # 4. 处理绘图工具松开
             self.left_button_push = False
             if 1 in self.painter_tools.values():  # 绘图工具松开
                 should_backup = False  # 添加备份控制标志
@@ -3245,38 +3308,19 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     #     self.setCursor(Qt.SizeAllCursor)
                 else:
                     self.setCursor(Qt.ArrowCursor)
-                # 以上几个ifelse都是判断鼠标移动的位置和选框的关系然后设定光标形状
-                # print(11)
-                if self.NpainterNmoveFlag:  # 如果没有在绘图也没在移动(调整)选区,在选区,则不断更新选区的数值
-                    # 手动拖动模式：使用防抖逻辑
-                    if not self.drag_started:
-                        distance = abs(event.x() - self.rx0) + abs(event.y() - self.ry0)
-                        if distance > self.drag_threshold:
-                            # 移动距离超过阈值，开始拖动
-                            self.drag_started = True
-                            self.x0 = self.rx0
-                            self.y0 = self.ry0
-                            
-                            # 关键修复：如果智能选区开启，现在禁用它
-                            if self.finding_rect:
-                                self.finding_rect = False
-                                print("🖱️ [选区] 检测到拖动，禁用智能选区，切换到手动模式")
-                        else:
-                            # 移动距离太小，暂时忽略
-                            return
-                    
-                    # 更新终点和边界修正
-                    self.x1 = event.x()
-                    self.y1 = event.y()
-                    if self.y1 > self.y0:
-                        self.y1 += 1
-                    else:
-                        self.y0 += 1
-                    if self.x1 > self.x0:
-                        self.x1 += 1
-                    else:
-                        self.x0 += 1
-                else:  # 说明在移动或者绘图,不过绘图没有什么处理的,下面是处理移动/拖动选区
+                
+                # === 选区创建逻辑 ===
+                # 1. 智能选区模式：检测拖动并切换到手动模式
+                if self._is_smart_selection_active() and self.left_button_push and not self.NpainterNmoveFlag:
+                    self._check_smart_to_manual_switch(event.x(), event.y())
+                
+                # 2. 手动选区模式：处理拖动创建选区
+                if self.NpainterNmoveFlag:
+                    self._handle_manual_selection_drag(event.x(), event.y())
+                
+                # 3. 已有选区：处理边缘/整体移动（只在鼠标按下时）
+                elif self.left_button_push and (self.move_x0 or self.move_x1 or self.move_y0 or self.move_y1 or self.move_rect):
+                    # 说明在移动或者绘图,不过绘图没有什么处理的,下面是处理移动/拖动选区
                     if self.move_x0:  # 判断拖动标志位,下同
                         self.x0 = event.x()
                     elif self.move_x1:
