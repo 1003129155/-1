@@ -21,7 +21,6 @@ pip install -r requirements.txt
 主要依赖包:
 ```
 PyQt5>=5.15.0
-opencv-python>=4.5.0
 Pillow>=8.0.0
 numpy>=1.19.0
 pynput>=1.7.0
