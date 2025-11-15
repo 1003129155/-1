@@ -22,7 +22,6 @@ class ToolbarManager:
     
     def init_slabel_ui(self):
         """初始化界面的参数"""
-        self.shower.hide()
         self.setToolTip("左クリックで選択、右クリックで戻る")
 
         # 使用左右分布布局：左侧吸附其他按钮，右侧吸附钉图和确定按钮
@@ -145,7 +144,8 @@ class ToolbarManager:
         self.choice_clor_btn.setToolTip('ペンの色を選択')
         self.choice_clor_btn.setIcon(QIcon(":/yst.png"))
         self.choice_clor_btn.clicked.connect(self.get_color)
-        self.choice_clor_btn.hoversignal.connect(self.Color_hoveraction)
+        # 移除悬停颜色菜单功能，避免干扰
+        # self.choice_clor_btn.hoversignal.connect(self.Color_hoveraction)
         
         self.lastbtn.setToolTip('元に戻す')
         self.lastbtn.setIcon(QIcon(":/last.png"))
@@ -200,100 +200,100 @@ class ToolbarManager:
         self.alpha_slider_label.setStyleSheet('color: rgb(255,255,255); font-size: 12px;')
         self.alpha_slider_label.setText("255")
         
-        # 设置3个预设按钮 - 水平排列，大emoji按钮设计，突出各自特性
+        # 设置3个颜色预设按钮 - 水平排列，红黄绿三色
         preset_btn_size = 40   # 正方形按钮，更大更容易点击
         preset_start_x = 250   # 起始位置
         preset_y = 10          # 垂直居中位置
         preset_spacing = 45    # 按钮间距
         
-        # 预设1: 细笔，不透明，黄绿色调
+        # 预设1: 红色
         self.preset_btn_1.setGeometry(preset_start_x, preset_y, preset_btn_size, preset_btn_size)
-        self.preset_btn_1.setText("●")  # 小圆点表示细笔
-        self.preset_btn_1.setToolTip('細ペン\n大きさ10 透明度255\n不透明の細いペン')
-        self.preset_btn_1.clicked.connect(self.apply_preset_1)
+        self.preset_btn_1.setText("●")
+        self.preset_btn_1.setToolTip('赤色\n#FF0000')
+        self.preset_btn_1.clicked.connect(self.apply_color_preset_red)
         
-        # 预设2: 普通笔 - 中等粗细，不透明，蓝色调
+        # 预设2: 黄色
         self.preset_btn_2.setGeometry(preset_start_x + preset_spacing, preset_y, preset_btn_size, preset_btn_size)
-        self.preset_btn_2.setText("●")  # 中等圆点表示普通笔
-        self.preset_btn_2.setToolTip('普通ペン\n大きさ30 透明度255\n標準的なペン')
-        self.preset_btn_2.clicked.connect(self.apply_preset_2)
+        self.preset_btn_2.setText("●")
+        self.preset_btn_2.setToolTip('黄色\n#FFFF00')
+        self.preset_btn_2.clicked.connect(self.apply_color_preset_yellow)
         
-        # 预设3: 粗笔 - 粗画笔，完全不透明，红色调
+        # 预设3: 绿色
         self.preset_btn_3.setGeometry(preset_start_x + preset_spacing * 2, preset_y, preset_btn_size, preset_btn_size)
-        self.preset_btn_3.setText("●")  # 大圆点表示粗笔
-        self.preset_btn_3.setToolTip('極太ペン\n大きさ60 透明度255\n太い描画ペン')
-        self.preset_btn_3.clicked.connect(self.apply_preset_3)
+        self.preset_btn_3.setText("●")
+        self.preset_btn_3.setToolTip('緑色\n#00FF00')
+        self.preset_btn_3.clicked.connect(self.apply_color_preset_green)
         
-        # 设置各个预设按钮的统一样式，只通过圆点大小区分
-        # 小圆点样式 - 细笔
-        small_dot_style = """
+        # 设置颜色预设按钮样式
+        # 红色按钮
+        red_style = """
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 180), stop:1 rgba(70, 130, 180, 180));
-                color: rgb(255, 255, 255);
-                border: 3px solid #4169E1;
+                    stop:0 rgba(255, 100, 100, 200), stop:1 rgba(255, 0, 0, 200));
+                color: rgb(139, 0, 0);
+                border: 3px solid #CC0000;
                 border-radius: 8px;
-                font-size: 8px;
+                font-size: 24px;
                 font-weight: bold;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
-                border: 3px solid #6495ED;
+                    stop:0 rgba(255, 120, 120, 240), stop:1 rgba(255, 30, 30, 240));
+                border: 3px solid #FF0000;
             }
             QPushButton:pressed {
-                background: rgba(65, 105, 225, 250);
-                border: 3px solid #0000FF;
+                background: rgba(255, 0, 0, 250);
+                border: 3px solid #AA0000;
             }
         """
         
-        # 中等圆点样式 - 普通笔
-        medium_dot_style = """
+        # 黄色按钮
+        yellow_style = """
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 180), stop:1 rgba(70, 130, 180, 180));
-                color: rgb(255, 255, 255);
-                border: 3px solid #4169E1;
+                    stop:0 rgba(255, 255, 120, 200), stop:1 rgba(255, 255, 0, 200));
+                color: rgb(139, 139, 0);
+                border: 3px solid #CCCC00;
                 border-radius: 8px;
-                font-size: 20px;
+                font-size: 24px;
                 font-weight: bold;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
-                border: 3px solid #6495ED;
+                    stop:0 rgba(255, 255, 150, 240), stop:1 rgba(255, 255, 30, 240));
+                border: 3px solid #FFFF00;
             }
             QPushButton:pressed {
-                background: rgba(65, 105, 225, 250);
-                border: 3px solid #0000FF;
+                background: rgba(255, 255, 0, 250);
+                border: 3px solid #AAAA00;
             }
         """
         
-        # 大圆点样式 - 粗笔
-        large_dot_style = """
+        # 绿色按钮
+        green_style = """
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 180), stop:1 rgba(70, 130, 180, 180));
-                color: rgb(255, 255, 255);
-                border: 3px solid #4169E1;
+                    stop:0 rgba(100, 255, 100, 200), stop:1 rgba(0, 255, 0, 200));
+                color: rgb(0, 100, 0);
+                border: 3px solid #00CC00;
                 border-radius: 8px;
-                font-size: 32px;
+                font-size: 24px;
                 font-weight: bold;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(100, 149, 237, 220), stop:1 rgba(70, 130, 180, 220));
-                border: 3px solid #6495ED;
+                    stop:0 rgba(120, 255, 120, 240), stop:1 rgba(30, 255, 30, 240));
+                border: 3px solid #00FF00;
             }
             QPushButton:pressed {
-                background: rgba(178, 34, 34, 250);
-                border: 3px solid #B22222;
+                background: rgba(0, 255, 0, 250);
+                border: 3px solid #00AA00;
             }
         """
         
-        self.preset_btn_1.setStyleSheet(small_dot_style)
-        self.preset_btn_2.setStyleSheet(medium_dot_style)
-        self.preset_btn_3.setStyleSheet(large_dot_style)
+        self.preset_btn_1.setStyleSheet(red_style)
+        self.preset_btn_2.setStyleSheet(yellow_style)
+        self.preset_btn_3.setStyleSheet(green_style)
         
     def show_paint_tools_menu(self):
         """显示绘画工具二级菜单"""
@@ -365,20 +365,22 @@ class ToolbarManager:
     def update_preset_buttons_visibility(self):
         """根据当前激活的工具更新预设按钮的显示状态"""
         current_tool = self.get_current_tool()
-        is_pen_tool = current_tool in ('pen_on', 'highlight_on')
+        # 所有绘图工具都显示颜色预设按钮
+        is_drawing_tool = current_tool in ('pen_on', 'highlight_on', 'drawarrow_on', 
+                                           'drawrect_bs_on', 'drawcircle_on', 'drawtext_on')
         
-        # 只有画笔工具时才显示预设按钮
+        # 所有绘图工具都显示颜色预设按钮
         if hasattr(self, 'preset_btn_1'):
-            self.preset_btn_1.setVisible(is_pen_tool)
+            self.preset_btn_1.setVisible(is_drawing_tool)
         if hasattr(self, 'preset_btn_2'):
-            self.preset_btn_2.setVisible(is_pen_tool)
+            self.preset_btn_2.setVisible(is_drawing_tool)
         if hasattr(self, 'preset_btn_3'):
-            self.preset_btn_3.setVisible(is_pen_tool)
+            self.preset_btn_3.setVisible(is_drawing_tool)
         
-        if is_pen_tool:
-            print("🎨 [画笔工具] 显示预设按钮")
+        if is_drawing_tool:
+            print(f"🎨 [绘图工具] 显示颜色预设按钮 (当前工具: {current_tool})")
         else:
-            print(f"🎨 [其他工具] 隐藏预设按钮 (当前工具: {current_tool})")
+            print(f"🎨 [非绘图工具] 隐藏颜色预设按钮 (当前工具: {current_tool})")
     
     def hide_paint_tools_menu(self):
         """隐藏绘画工具二级菜单"""

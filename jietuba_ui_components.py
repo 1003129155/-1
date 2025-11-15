@@ -4,14 +4,16 @@ jietuba_ui_components.py - UI组件模块
 包含截图工具使用的各种UI组件和辅助类：
 - 多屏幕调试工具
 - 颜色按钮、悬停按钮等UI控件
-- 智能选区查找器
+- 智能窗口选择器(基于 Windows API)
 - 自动调整大小的文本编辑器
 
 从 jietuba_screenshot.py 拆分而来，降低单文件复杂度
 """
 import os
-import cv2
 import math
+import win32gui
+import win32api
+import win32con
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QColor, QCursor
 from PyQt5.QtWidgets import QPushButton, QGroupBox, QTextEdit, QFrame
@@ -222,61 +224,98 @@ class CanMoveGroupbox(QGroupBox):
 
 
 class Finder:
-    """智能选区查找器 - 基于OpenCV的轮廓检测"""
+    """智能窗口选择器 - 基于 Windows API 的窗口检测"""
     def __init__(self, parent):
-        self.h = self.w = 0
-        self.rect_list = self.contours = []
-        self.area_threshold = 200
         self.parent = parent
-        self.img = None
+        self.windows = []  # 存储所有窗口信息 [(hwnd, rect), ...]
+        self.screen_offset_x = 0
+        self.screen_offset_y = 0
 
     def find_contours_setup(self):
-        """准备轮廓数据"""
+        """枚举所有可见窗口"""
+        self.windows = []
+        
+        # 获取屏幕偏移（多屏幕支持）
         try:
-            self.area_threshold = self.parent.parent.ss_areathreshold.value()
+            screen_geo = self.parent.parent.screen_geometry
+            self.screen_offset_x = screen_geo.x()
+            self.screen_offset_y = screen_geo.y()
         except Exception:
-            self.area_threshold = 200
-
-        if self.img is None:
-            return
-
-        self.h, self.w, _ = self.img.shape
-        gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
-        th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                   cv2.THRESH_BINARY, 5, 2)
-        self.contours = cv2.findContours(th, cv2.RETR_LIST,
-                                         cv2.CHAIN_APPROX_SIMPLE)[-2]
-        self.find_contours()
-
-    def find_contours(self):
-        """查找所有符合条件的轮廓矩形"""
-        draw_img = cv2.drawContours(self.img.copy(), self.contours, -1, (0, 255, 0), 1)
-        self.rect_list = [[0, 0, self.w, self.h]]
-        for i in self.contours:
-            x, y, w, h = cv2.boundingRect(i)
-            area = cv2.contourArea(i)
-            if area > self.area_threshold and w > 10 and h > 10:
-                self.rect_list.append([x, y, x + w, y + h])
-        print('contours:', len(self.contours), 'left', len(self.rect_list))
+            self.screen_offset_x = 0
+            self.screen_offset_y = 0
+        
+        def enum_windows_callback(hwnd, _):
+            """枚举窗口回调函数"""
+            # 只处理可见窗口
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            
+            # 跳过没有标题的窗口（通常是系统窗口）
+            title = win32gui.GetWindowText(hwnd)
+            if not title:
+                return True
+            
+            # 获取窗口矩形
+            try:
+                rect = win32gui.GetWindowRect(hwnd)
+                x1, y1, x2, y2 = rect
+                
+                # 窗口太小的忽略
+                if (x2 - x1) < 20 or (y2 - y1) < 20:
+                    return True
+                
+                # 转换为相对于截图区域的坐标
+                x1 -= self.screen_offset_x
+                y1 -= self.screen_offset_y
+                x2 -= self.screen_offset_x
+                y2 -= self.screen_offset_y
+                
+                self.windows.append((hwnd, [x1, y1, x2, y2], title))
+            except Exception:
+                pass
+            
+            return True
+        
+        try:
+            win32gui.EnumWindows(enum_windows_callback, None)
+            print(f'找到 {len(self.windows)} 个可见窗口')
+        except Exception as e:
+            print(f'枚举窗口失败: {e}')
+            self.windows = []
 
     def find_targetrect(self, point):
-        """根据鼠标位置查找最小包含矩形"""
-        target_rect = [0, 0, self.w, self.h]
-        target_area = 1920 * 1080
-        for rect in self.rect_list:
-            if point[0] in range(rect[0], rect[2]):
-                if point[1] in range(rect[1], rect[3]):
-                    area = (rect[3] - rect[1]) * (rect[2] - rect[0])
-                    if area < target_area:
-                        target_rect = rect
-                        target_area = area
+        """根据鼠标位置查找最小包含窗口"""
+        x, y = point
+        target_rect = None
+        min_area = float('inf')
+        
+        for hwnd, rect, title in self.windows:
+            x1, y1, x2, y2 = rect
+            # 检查点是否在窗口内
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                area = (x2 - x1) * (y2 - y1)
+                # 找最小的包含窗口
+                if area < min_area:
+                    min_area = area
+                    target_rect = rect
+        
+        # 如果没找到窗口，返回全屏
+        if target_rect is None:
+            try:
+                w = self.parent.width()
+                h = self.parent.height()
+                target_rect = [0, 0, w, h]
+            except Exception:
+                target_rect = [0, 0, 1920, 1080]
+        
         return target_rect
 
     def clear_setup(self):
         """清理数据"""
-        self.h = self.w = 0
-        self.rect_list = self.contours = []
-        self.img = None
+        self.windows = []
+        self.screen_offset_x = 0
+        self.screen_offset_y = 0
+
 
 
 class AutotextEdit(QTextEdit):

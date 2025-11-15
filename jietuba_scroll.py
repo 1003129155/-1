@@ -33,24 +33,20 @@ jietuba_scroll.py - 滚动截图窗口模块
 import os
 import time
 import ctypes
+import io
 from ctypes import wintypes
 from datetime import datetime
-from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication, QDesktopWidget
+from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
 from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
 from PIL import Image
-import io
 
 # Windows API 常量
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
-
-import os
-import time
-import ctypes
 from ctypes import wintypes
 from datetime import datetime
-from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication, QDesktopWidget
+from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
 from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
 from PIL import Image
@@ -89,6 +85,9 @@ class ScrollCaptureWindow(QWidget):
         self.screenshots = []  # 存储截图的列表
         self.scroll_distances = []  # 存储每次滚动的距离（像素）
         self.current_scroll_distance = 0  # 当前累积的滚动距离
+        
+        # 实时拼接相关
+        self.stitched_result = None  # 当前拼接的结果图
         
         # 滚动检测相关
         self.last_scroll_time = 0  # 最后一次滚动的时间戳
@@ -573,7 +572,7 @@ class ScrollCaptureWindow(QWidget):
         return similarity >= self.duplicate_threshold
     
     def _do_capture(self):
-        """执行截图（不进行去重，所有截图都保存）"""
+        """执行截图并实时拼接"""
         try:
             current_count = len(self.screenshots) + 1
             print(f"\n📸 截取第 {current_count} 张图片")
@@ -609,11 +608,32 @@ class ScrollCaptureWindow(QWidget):
                 'BGRA'
             ).convert('RGB')
             
-            # 🆕 截图阶段不进行去重检测，所有截图都保存
-            # 去重逻辑移到合成阶段（smart_stitch.py）
-            
-            # 添加到截图列表
+            # 添加到截图列表（仍保留列表，用于最后的备份）
             self.screenshots.append(pil_image)
+            
+            # 🆕 实时拼接：每截一张图就与之前的结果拼接
+            if self.stitched_result is None:
+                # 第一张截图，直接作为初始结果
+                self.stitched_result = pil_image
+                print(f"✅ 初始化拼接结果 (尺寸: {pil_image.size[0]}x{pil_image.size[1]})")
+            else:
+                # 后续截图，与当前结果拼接
+                print(f"🔗 开始拼接第 {len(self.screenshots)} 张图片...")
+                try:
+                    from jietuba_long_stitch import stitch_images
+                    self.stitched_result = stitch_images(
+                        self.stitched_result,
+                        pil_image,
+                        ignore_right_pixels=20
+                    )
+                    if self.stitched_result:
+                        print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                    else:
+                        print("⚠️ 拼接失败，保持原结果")
+                except Exception as e:
+                    print(f"⚠️ 拼接出错: {e}，保持原结果")
+                    import traceback
+                    traceback.print_exc()
             
             # 记录滚动距离（第一张截图距离为0，后续为累积距离）
             if len(self.screenshots) == 1:
@@ -629,7 +649,7 @@ class ScrollCaptureWindow(QWidget):
             # 更新计数
             self.count_label.setText(f"スクショ: {len(self.screenshots)} 枚")
             
-            print(f"✅ 第 {len(self.screenshots)} 張截图完成 (尺寸: {pil_image.size[0]}x{pil_image.size[1]})")
+            print(f"✅ 第 {len(self.screenshots)} 张截图完成 (尺寸: {pil_image.size[0]}x{pil_image.size[1]})")
             
         except Exception as e:
             print(f"❌ 截图时出错: {e}")
@@ -700,6 +720,14 @@ class ScrollCaptureWindow(QWidget):
     def get_screenshots(self):
         """获取所有截图"""
         return self.screenshots
+    
+    def get_stitched_result(self):
+        """获取实时拼接的结果图
+        
+        Returns:
+            PIL.Image: 拼接好的完整图片，如果没有截图则返回None
+        """
+        return self.stitched_result
     
     def get_scroll_distances(self):
         """获取所有滚动距离记录

@@ -641,11 +641,11 @@ class ConfigManager:
         """获取所有绘画工具的配置"""
         # 默认工具配置
         default_settings = {
-            'pen_on': {'size': 3, 'alpha': 255, 'color': '#ff0000'},           # 画笔：细一些，完全不透明，红色
+            'pen_on': {'size': 5, 'alpha': 255, 'color': '#ff0000'},           # 画笔：细一些，完全不透明，红色
             'highlight_on': {'size': 30, 'alpha': 255, 'color': '#ffeb3b'},    # 荧光笔：更粗，完全不透明，黄色
-            'drawarrow_on': {'size': 2, 'alpha': 255, 'color': '#ff0000'},     # 箭头：更细，完全不透明，红色
-            'drawrect_bs_on': {'size': 2, 'alpha': 200, 'color': '#ff0000'},   # 矩形：细边框，半透明，红色
-            'drawcircle_on': {'size': 2, 'alpha': 200, 'color': '#ff0000'},    # 圆形：细边框，半透明，红色
+            'drawarrow_on': {'size': 3, 'alpha': 255, 'color': '#ff0000'},     # 箭头：更细，完全不透明，红色
+            'drawrect_bs_on': {'size': 3, 'alpha': 200, 'color': '#ff0000'},   # 矩形：细边框，半透明，红色
+            'drawcircle_on': {'size': 3, 'alpha': 200, 'color': '#ff0000'},    # 圆形：细边框，半透明，红色
             'drawtext_on': {'size': 16, 'alpha': 255, 'color': '#ff0000'},     # 文字：16像素字体，完全不透明，红色
         }
         
@@ -1124,7 +1124,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.03 | 更新日: 2025.11/13")
+        self.version_label = QLabel("バージョン: 1.04 | 更新日: 2025.11/15")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
@@ -1481,7 +1481,7 @@ def main():
     """主函数"""
     app = QApplication(sys.argv)
     # 托盘应用关键设置：避免所有窗口被隐藏/关闭时自动退出
-    # 解决在托盘状态下执行截图、翻译或ESC退出导致程序无提示退出的问题
+
     try:
         app.setQuitOnLastWindowClosed(False)
     except Exception:

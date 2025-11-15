@@ -17,23 +17,16 @@ jietuba_ui_components, jietuba_paint_layer (重构后新增)
 import gc
 import math
 import os
-import re
 import sys
 import time
-
-import cv2
 from collections import deque
-from numpy import array, zeros, uint8, float32,array
 from PyQt5.QtCore import QPoint, QRectF, QMimeData, QSize
-from PyQt5.QtCore import QRect, Qt, pyqtSignal, QStandardPaths, QTimer, QSettings, QUrl
-from PyQt5.QtGui import QCursor, QBrush, QScreen,QWindow
+from PyQt5.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
+from PyQt5.QtGui import QCursor, QBrush, QScreen, QWindow
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QIcon, QFont, QImage, QColor, QPolygon
 from PyQt5.QtWidgets import *  # 包含 QFrame 以支持透明输入框无边框设置
-from PyQt5.QtWidgets import QSlider, QColorDialog, QWidget
-from jietuba_widgets import FramelessEnterSendQTextEdit,Freezer
+from jietuba_widgets import Freezer
 
-# OCR功能已移除 - 相关导入已禁用
-# from jietuba_public import OcrimgThread, Commen_Thread, TipsShower, PLATFORM_SYS,CONFIG_DICT, get_screenshot_save_dir
 from jietuba_public import Commen_Thread, TipsShower, PLATFORM_SYS,CONFIG_DICT, get_screenshot_save_dir
 import jietuba_resource
 from pynput.mouse import Controller
@@ -44,7 +37,7 @@ from jietuba_ui_components import (
     ColorButton, HoverButton, HoverGroupbox, CanMoveGroupbox,
     Finder, AutotextEdit, DEBUG_MONITOR
 )
-from jietuba_paint_layer import MaskLayer, PaintLayer, get_line_interpolation
+from jietuba_drawing import MaskLayer, PaintLayer, get_line_interpolation
 from jietuba_toolbar import ToolbarManager
 
 # ================== 多屏调试开关 ==================
@@ -55,7 +48,6 @@ from jietuba_toolbar import ToolbarManager
 class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     showm_signal = pyqtSignal(str)
     close_signal = pyqtSignal()
-    ocr_image_signal = pyqtSignal(str)
     screen_shot_result_signal = pyqtSignal(str)
     screen_shot_end_show_sinal = pyqtSignal(QPixmap)
     set_area_result_signal = pyqtSignal(list)
@@ -144,8 +136,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.paintlayer = PaintLayer(self)  # 绘图层
         self.mask = MaskLayer(self)  # 遮罩层
         self.text_box = AutotextEdit(self)  # 文字工具类
-        self.ocr_freezer = None
-        self.shower = FramelessEnterSendQTextEdit(self, enter_tra=True)  # 截屏时文字识别的小窗口
         self.settings = QSettings('Fandes', 'jietuba')
         self.setMouseTracking(True)
         
@@ -165,11 +155,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.botton_box = QGroupBox(self)  # botton_box是截屏选框旁边那个按钮堆的box
         self.save_botton = QPushButton(QIcon(":/saveicon.png"), '', self.botton_box)
         self.save_botton.clicked.connect(self.handle_save_button_click)
-        # OCR和翻译功能已移除
-        # self.ocr_botton = QPushButton(self.botton_box)
-        # self.translate_botton = QPushButton(self.botton_box)  # 添加翻译按钮
         self.copy_botton = QPushButton(self.botton_box)  # 添加复制按钮
-        self.sure_btn = QPushButton("完了", self.botton_box)
+        self.sure_btn = QPushButton("確定", self.botton_box)
         self.freeze_img_botton = QPushButton(self.botton_box)
         self.long_screenshot_btn = QPushButton(self.botton_box)  # 长截图按钮
         self.pencolor = QColor(Qt.red)
@@ -222,9 +209,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         if mode != "screenshot":#非截屏模式(jietuba中也会调用截屏工具进行选取录屏或者文字识别)
             self.save_botton.hide()
             self.freeze_img_botton.hide()
-            # OCR和翻译按钮已移除
-            # self.ocr_botton.hide()
-            # self.translate_botton.hide()
             
         # self.setVisible(False)
         # self.setWindowOpacity(0)
@@ -260,6 +244,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 修改：智能选区默认关闭，避免启动时卡顿
         self.smartcursor_on = self.settings.value("screenshot/smartcursor", False, type=bool)  # 默认改为False
         self.finding_rect = True  # 正在自动寻找选取的控制变量,就进入截屏之后会根据鼠标移动到的位置自动选取,
+        self.drag_started = False  # 手动拖动是否已开始
+        self.drag_threshold = 16  # 拖动阈值（像素）
         self.tool_width = 5
         # 画笔相关属性初始化
         self.pen_drawn_points_count = 0  # 画笔绘制的点数计数器
@@ -374,7 +360,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
         painter.end()
         return QIcon(pixmap)
-    def Color_hoveraction(self, hover):  # 鼠标滑过选色按钮时触发的
+    def Color_hoveraction(self, hover):  # 鼠标滑过选色按钮时触发的 - 已禁用
+        # 功能已移除，保留函数避免引用错误
+        return
+        # 以下代码已禁用
+        """
         if hover:
             try:
                 self.closenomalcolorboxtimer.stop()
@@ -414,9 +404,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
             self.closenomalcolorboxtimer.timeout.connect(self.closenomalcolorbox)
             self.closenomalcolorboxtimer.start(2000)
-
-            # self.refresh_hideclosenomalsignal()
-        # else:
+        """
 
     def closenomalcolorboxsignalhandle(self, s):  # 关闭常见颜色浮窗的函数
         if s:
@@ -611,7 +599,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     
                     # 触发文字绘制处理 - 改进的保存逻辑
                     try:
-                        from jietuba_text_drawer import UnifiedTextDrawer
+                        from jietuba_drawing import UnifiedTextDrawer
                         
                         # 在钉图模式下处理
                         if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
@@ -819,19 +807,43 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             print(f"💾 [配置保存] 工具 {current_tool} 透明度设置已保存: {self.alpha}")
     
     def apply_preset_1(self):
-        """应用预设1：細笔，半透明（大小10，透明度255）"""
-        self.apply_preset_settings(10, 255)
-        print("🎯 [预设切换] 应用预设1: 细画笔 (大小10, 透明度255)")
+        """应用预设1：红色"""
+        self.apply_color_preset_red()
 
     def apply_preset_2(self):
-        """应用预设2：普通笔，中等透明度（大小40，透明度255）"""
-        self.apply_preset_settings(30, 255)
-        print("🎯 [预设切换] 应用预设2: 中画笔 (大小30, 透明度255)")
+        """应用预设2：黄色"""
+        self.apply_color_preset_yellow()
 
     def apply_preset_3(self):
-        """应用预设3：粗画笔，完全不透明（大小60，透明度255）"""
-        self.apply_preset_settings(60, 255)
-        print("🎯 [预设切换] 应用预设3: 粗画笔 (大小60, 透明度255)")
+        """应用预设3：绿色"""
+        self.apply_color_preset_green()
+    
+    def apply_color_preset_red(self):
+        """应用红色预设 #FF0000"""
+        self.pencolor = QColor(255, 0, 0, self.alpha)
+        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        # 更新文本框颜色（如果文本工具激活）
+        if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
+            self.text_box.setTextColor(self.pencolor)
+        print("� [颜色预设] 应用红色 #FF0000")
+
+    def apply_color_preset_yellow(self):
+        """应用黄色预设 #FFFF00"""
+        self.pencolor = QColor(255, 255, 0, self.alpha)
+        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        # 更新文本框颜色（如果文本工具激活）
+        if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
+            self.text_box.setTextColor(self.pencolor)
+        print("� [颜色预设] 应用黄色 #FFFF00")
+
+    def apply_color_preset_green(self):
+        """应用绿色预设 #00FF00"""
+        self.pencolor = QColor(0, 255, 0, self.alpha)
+        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        # 更新文本框颜色（如果文本工具激活）
+        if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
+            self.text_box.setTextColor(self.pencolor)
+        print("� [颜色预设] 应用绿色 #00FF00")
 
     def apply_preset_settings(self, size, alpha):
         """应用预设的尺寸和透明度设置"""
@@ -1182,7 +1194,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             return primary
 
     def screen_shot(self, pix=None,mode = "screenshot"):
-        """mode: screenshot 、orc、set_area、getpix。screenshot普通截屏;非截屏模式:orc获取ocr源图片; set_area用于设置区域、getpix提取区域"""
+        """mode: screenshot、set_area、getpix。screenshot普通截屏;非截屏模式: set_area用于设置区域、getpix提取区域"""
         # 截屏函数,功能有二:当有传入pix时直接显示pix中的图片作为截屏背景,否则截取当前屏幕作为背景;前者用于重置所有修改
         # if PLATFORM_SYS=="darwin":
         self.sshoting = True
@@ -1376,11 +1388,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 修复：鼠标位置不能是负数，会导致pixelColor错误
         self.mouse_posx = self.mouse_posy = 200  # 使用安全的正数位置
         self.qimg = get_pix.toImage()
-        temp_shape = (self.qimg.height(), self.qimg.width(), 4)
-        ptr = self.qimg.bits()
-        ptr.setsize(self.qimg.byteCount())
-        result = array(ptr, dtype=uint8).reshape(temp_shape)[..., :3]
-        self.finder.img = result
+        # 使用 Windows API 枚举窗口，不需要图片数据
         self.finder.find_contours_setup()
         QApplication.processEvents()
     
@@ -1667,57 +1675,22 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     
     def _on_long_screenshot_finished(self):
         """长截图完成"""
-        print("📸 长截图完成，开始拼接...")
+        print("📸 长截图完成，获取拼接结果...")
         
         try:
-            from jietuba_smart_stitch import auto_stitch
             from jietuba_stitch import stitch_images_vertical
             from PyQt5.QtWidgets import QApplication, QMessageBox
             from PyQt5.QtGui import QImage, QPixmap
             
-            # 获取所有截图
-            screenshots = self.scroll_capture_window.get_screenshots()
+            # 🆕 直接获取实时拼接的结果图
+            result_image = self.scroll_capture_window.get_stitched_result()
             
-            # 🆕 获取滚动距离信息（用于混合拼接方案）
-            scroll_distances = self.scroll_capture_window.get_scroll_distances()
-            
-            if not screenshots or len(screenshots) == 0:
+            if result_image is None:
                 QMessageBox.warning(None, "警告", "スクリーンショットが撮影されませんでした。")
                 self._cleanup_long_screenshot()
                 return
             
-            print(f"🖼️ 共有 {len(screenshots)} 张截图，开始拼接...")
-            if scroll_distances and len(scroll_distances) > 0:
-                print(f"📏 滚动距离记录: {scroll_distances}")
-            else:
-                print("📏 使用纯图像匹配方案（无滚动距离辅助）")
-            
-            # 使用升级后的智能拼接（ORB特征点匹配 + 滚动距离辅助）
-            used_fallback = False  # 标记是否使用了备用拼接方案
-            try:
-                print("🤖 使用混合拼接（滚动距离 + ORB特征点匹配微调 + RANSAC）...")
-                result_image = auto_stitch(
-                    screenshots,
-                    mode='smart',
-                    min_confidence=0.5,  # 使用推荐的0.5阈值
-                    filter_duplicates=True,  # 启用重复过滤
-                    duplicate_high_threshold=0.6,  # 连续两图重复率>60%
-                    duplicate_low_threshold=0.2,  # 隔一图重复率>20%
-                    scroll_distances=scroll_distances  # 🆕 传入滚动距离作为初始估计
-                )
-                print("✅ 智能拼接完成")
-            except Exception as e:
-                print(f"⚠️ 智能拼接失败: {e}，使用简单拼接")
-                used_fallback = True  # 标记使用了备用方案
-                # 使用简单拼接作为最终后备方案
-                result_image = stitch_images_vertical(
-                    screenshots,
-                    align='left',
-                    spacing=0,
-                    bg_color=(255, 255, 255)
-                )
-            
-            print(f"✅ 拼接完成，图片大小: {result_image.size}")
+            print(f"✅ 获取拼接结果，图片大小: {result_image.size}")
             
             # 将PIL Image转换为QImage
             if result_image.mode == 'RGB':
@@ -1769,16 +1742,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             
             print("✅ 长截图已复制到剪贴板")
             
-            # 只在使用备用方案时显示提示消息
-            if used_fallback:
-                QMessageBox.information(
-                    None,
-                    "長スクショ完了",
-                    f"長スクリーンショットが完了しました。\n{len(screenshots)} 枚の画像を結合\n\n※ スマート結合に失敗したため、シンプル結合を使用しました。\nクリップボードにコピーされました。"
-                )
-            
         except Exception as e:
-            print(f"❌ 拼接长截图失败: {e}")
+            print(f"❌ 处理长截图失败: {e}")
             import traceback
             traceback.print_exc()
             
@@ -1838,7 +1803,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 
                 # 触发文字提交处理 - 改进的保存逻辑
                 try:
-                    from jietuba_text_drawer import UnifiedTextDrawer
+                    from jietuba_drawing import UnifiedTextDrawer
                     
                     # 确保绘画层存在
                     if hasattr(self, 'paintlayer') and self.paintlayer:
@@ -2355,15 +2320,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             except:
                 clipboard.setPixmap(self.final_get_img)
                 # 移除了图像数据已复制到剪切板提示
-        elif self.mode == "ocr":
-            try:
-                if hasattr(self, 'save_data_thread'):
-                    self.save_data_thread.wait()
-                # 使用新的保存路径
-                filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
-                self.ocr_image_signal.emit(filepath)
-            except:
-                print(sys.exc_info(), 1822)
 
         # self.save_data_thread.wait()
         # self.clear()
@@ -2804,17 +2760,21 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     self.by = abs(max(self.y1, self.y0) - event.y())
                 else:
                     self.NpainterNmoveFlag = True  # 没有绘图没有移动还按下了左键,说明正在选区,标志变量
-                    # if self.finding_rect:
-                    #     self.rx0 = event.x()
-                    #     self.ry0 = event.y()
-                    # else:
+                    self.drag_started = False  # 重置拖动状态
+                    
                     self.rx0 = event.x()  # 记录下点击位置
                     self.ry0 = event.y()
-                    if self.x1 == -50:
-                        self.x1 = event.x()
-                        self.y1 = event.y()
-
-                    # print('re')
+                    
+                    # 如果智能选区开启，暂时不重置选区坐标
+                    # 等待用户拖动或松开鼠标来决定是确认智能选区还是手动拖拽
+                    if not self.finding_rect:
+                        # 非智能选区模式：准备手动拖拽
+                        # x0, y0 will be set when drag starts (in mouseMoveEvent)
+                        pass
+                    # 注释掉立即设置x1,y1，改为在mouseMoveEvent中根据拖动距离判断
+                    # if self.x1 == -50:
+                    #     self.x1 = event.x()
+                    #     self.y1 = event.y()
                 if r:  # 判断是否点击在了对角线上
                     if (self.y0 - 8 < event.y() < self.y0 + 8) and (
                             x0 - 8 < event.x() < x1 + 8):
@@ -2824,11 +2784,15 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                             x0 - 8 < event.x() < x1 + 8):
                         self.move_y1 = True
                         # print('y1')
-            if self.finding_rect:
-                self.finding_rect = False
-                # self.finding_rectde = True
-            # 仅在非绘画模式时隐藏工具栏，激活绘画功能时保持工具栏可见
-            if not (1 in self.painter_tools.values()):
+            
+            # 处理智能选区状态
+            # 保存智能选区状态，如果用户开始拖动，将在 mouseMoveEvent 中禁用
+            # 如果用户直接松开鼠标（mouseReleaseEvent），则确认智能选区
+            # 注意：不在这里立即设置 finding_rect = False
+            
+            # 仅在非绘画模式且没有已存在选区时才隐藏工具栏
+            # 如果已经有选区（choicing=True），则保持工具栏状态
+            if not (1 in self.painter_tools.values()) and not self.choicing:
                 self.botton_box.hide()
             self.update()
 
@@ -2854,6 +2818,15 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self._update_selection_preview()
                 self._commit_selection()
                 return
+            
+            # 智能选区确认：如果用户点击但没有拖动，且智能选区模式开启，则确认智能选区
+            if not self.drag_started and self.finding_rect:
+                print("🎯 [选区] 点击未拖动，确认智能选区")
+                self.finding_rect = False  # 关闭智能选区模式
+                self.choice()  # 确认选区并显示工具栏
+                self.drag_started = False  # 重置拖动标志
+                return
+            
             self.left_button_push = False
             if 1 in self.painter_tools.values():  # 绘图工具松开
                 should_backup = False  # 添加备份控制标志
@@ -2989,7 +2962,20 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.setCursor(Qt.ArrowCursor)
             self.NpainterNmoveFlag = False  # 选区结束标志置零
             self.move_rect = self.move_y0 = self.move_x0 = self.move_x1 = self.move_y1 = False
-            self.choice()
+            
+            # 工具栏显示逻辑：
+            # 1. 刚完成拖动 -> 显示工具栏
+            # 2. 已有选区 -> 保持工具栏状态不变
+            # 3. 无选区且未拖动 -> 不显示
+            print(f"[调试] mouseReleaseEvent: drag_started={self.drag_started}, choicing={self.choicing}")
+            if self.drag_started:
+                # 刚完成拖动选区，显示工具栏
+                self.choice()
+            elif not self.choicing:
+                # 没有选区也没拖动，隐藏工具栏
+                print(f"[调试] 无选区且未拖动，隐藏工具栏")
+                self.botton_box.hide()
+            # else: 已有选区，保持工具栏状态不变
             # self.sure_btn.show()
             
         elif event.button() == Qt.RightButton:  # 右键 - 统一行为：直接退出截图
@@ -3006,7 +2992,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         self.parent.show()
                     # 如果没有_was_visible属性或值为False，说明原本在托盘中，不显示主窗口
 
-                self.parent.bdocr = False
             except:
                 print(sys.exc_info(), 2051)
             self.clear_and_hide()
@@ -3106,7 +3091,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     return
             self.mouse_posx = event.x()  # 先储存起鼠标位置,用于画笔等的绘图计算
             self.mouse_posy = event.y()
-            if self.finding_rect and self.smartcursor_on and self.isVisible():  # 智能选区只在主窗口可见时使用
+            # 智能选区只在：1)finding_rect开启 2)智能光标开启 3)主窗口可见 4)没有按下鼠标(不在拖拽中)
+            if self.finding_rect and self.smartcursor_on and self.isVisible() and not self.left_button_push:
                 # 延迟初始化智能选区，仅在用户真正需要时才进行
                 if not self._smart_selection_initialized:
                     self._lazy_init_smart_selection()
@@ -3133,7 +3119,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 #     print(f"主窗口收到鼠标移动: left_button_push={self.left_button_push}, pen_on={self.painter_tools.get('pen_on', 0)}, paint_x={paint_x}, paint_y={paint_y}")
                 
                 if self.left_button_push:
-                    print(f"主窗口绘画调试: left_button_push=True, 开始绘画处理")
+                    # print(f"主窗口绘画调试: left_button_push=True, 开始绘画处理")  # 高频输出已移除
                     if self._is_brush_tool_active():
                         tool_label = "荧光笔" if self.painter_tools['highlight_on'] else "画笔"
                         
@@ -3166,7 +3152,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                             # 已经在垂直线模式，锁定X坐标
                             paint_x = self.pen_locked_coordinate
                         
-                        print(f"添加{tool_label}点: [{paint_x}, {paint_y}]")
+                        # print(f"添加{tool_label}点: [{paint_x}, {paint_y}]")  # 高频输出已移除
                         self.pen_pointlist.append([paint_x, paint_y])
                         self.pen_drawn_points_count += 1  # 增加计数器
                         # 更新最后一个点用于移动检测
@@ -3262,13 +3248,27 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 # 以上几个ifelse都是判断鼠标移动的位置和选框的关系然后设定光标形状
                 # print(11)
                 if self.NpainterNmoveFlag:  # 如果没有在绘图也没在移动(调整)选区,在选区,则不断更新选区的数值
-                    # self.sure_btn.hide()
-                    # self.roll_ss_btn.hide()
-                    self.x1 = event.x()  # 储存当前位置到self.x1下同
+                    # 手动拖动模式：使用防抖逻辑
+                    if not self.drag_started:
+                        distance = abs(event.x() - self.rx0) + abs(event.y() - self.ry0)
+                        if distance > self.drag_threshold:
+                            # 移动距离超过阈值，开始拖动
+                            self.drag_started = True
+                            self.x0 = self.rx0
+                            self.y0 = self.ry0
+                            
+                            # 关键修复：如果智能选区开启，现在禁用它
+                            if self.finding_rect:
+                                self.finding_rect = False
+                                print("🖱️ [选区] 检测到拖动，禁用智能选区，切换到手动模式")
+                        else:
+                            # 移动距离太小，暂时忽略
+                            return
+                    
+                    # 更新终点和边界修正
+                    self.x1 = event.x()
                     self.y1 = event.y()
-                    self.x0 = self.rx0  # 鼠标按下时记录的坐标,下同
-                    self.y0 = self.ry0
-                    if self.y1 > self.y0:  # 下面是边界修正,由于选框占用了一个像素,否则有误差
+                    if self.y1 > self.y0:
                         self.y1 += 1
                     else:
                         self.y0 += 1
@@ -3384,12 +3384,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.pixPainter = None
         except Exception as e:
             print(f"⚠️ 清理pixPainter时出错: {e}")
-            
-        try:
-
-            pass
-        except Exception as e:
-            print(f"⚠️ 清理OCR freezer时出错: {e}")
             
         try:
             if PLATFORM_SYS == "darwin":  # 如果系统为macos

@@ -5,7 +5,6 @@ jietuba_widgets.py - 自定义控件模块
 提供截图工具使用的各种自定义 UI 控件和组件。
 
 主要类:
-- FramelessEnterSendQTextEdit: 无边框回车发送文本框
 - Freezer: 钉图窗口类,支持图片置顶显示和编辑
 
 特点:
@@ -15,1176 +14,13 @@ jietuba_widgets.py - 自定义控件模块
 jietuba_public, jietuba_resource, jietuba_text_drawer
 """
 import os
-import re
-import numpy as np
-import cv2
 import jietuba_resource
 from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QUrl, QTimer, QSize, QPoint, QRectF
-from PyQt5.QtGui import QTextCursor, QDesktopServices, QMouseEvent, QTextOption, QCursor, QKeyEvent
-from PyQt5.QtGui import QPainter, QPen, QIcon, QFont, QImage, QPixmap, QColor, QLinearGradient, QMovie, QPolygon, QBrush
+from PyQt5.QtGui import QTextCursor, QMouseEvent, QCursor, QKeyEvent
+from PyQt5.QtGui import QPainter, QPen, QIcon, QFont, QImage, QPixmap, QColor, QMovie, QPolygon, QBrush
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QTextEdit, QWidget, QHBoxLayout, QVBoxLayout, QFileDialog, QMenu
 from jietuba_public import linelabel,TipsShower, get_screenshot_save_dir
-# OcrimgThread已移除 - 如需OCR功能请手动添加
 
-class FramelessEnterSendQTextEdit(QTextEdit):
-    """重写的OCR文字识别结果显示窗口 - 更简单高效"""
-    clear_signal = pyqtSignal()
-    showm_signal = pyqtSignal(str)
-    del_myself_signal = pyqtSignal(int)
-
-    def __init__(self, parent=None, enter_tra=False, autoresetid=0):
-        super().__init__(parent)
-        self._parent_widget = parent  # 避免覆盖parent()方法
-        self.action = self.show
-        self.moving = False
-        self.autoreset = autoresetid
-        self.enter_tra = enter_tra  # 保存参数为实例变量
-        
-        # 历史记录设置
-        self.hsp = os.path.join(QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation),
-                                "JietubaSimpleModehistory.txt")
-        if os.path.exists(self.hsp):
-            with open(self.hsp, "r", encoding="utf-8") as f:
-                self.history = f.read().split("<\n\n<<>>\n\n>")
-        else:
-            self.history = []
-        self.setMouseTracking(True)
-        
-        # 字体设置 - 优化按钮和文本的字体大小比例
-        text_font = QFont('Microsoft YaHei', 11)  # 文本字体稍小
-        text_font.setStyleHint(QFont.SansSerif)
-        self.setFont(text_font)
-        self.setPlaceholderText('OCR認識結果...')
-        
-        # 文本设置
-        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
-        self.setLineWrapMode(QTextEdit.WidgetWidth)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.document().setDocumentMargin(15)
-
-        text_style = """
-            FramelessEnterSendQTextEdit {
-                background-color: rgba(255, 255, 255, 0.98);
-                border: 2px solid #3498db;
-                border-radius: 12px;
-                padding: 15px;
-                font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                font-size: 11pt;
-                color: #2c3e50;
-                selection-background-color: #3498db;
-                line-height: 1.4;
-            }
-        """
-        self.setStyleSheet(text_style)
-        
-        # 初始大小 - 明显更大
-        self.setMinimumSize(300, 150)
-        self.resize(400, 200)
-
-        # 定位到屏幕中央
-        screen_center = QApplication.desktop().screen().rect().center()
-        self.move(screen_center.x() - 200, screen_center.y() - 100)
-        
-        # 连接文本变化信号
-        self.document().contentsChanged.connect(self.auto_resize)
-        
-        # 创建工具栏
-        self._create_toolbar()
-        
-        # 信号连接
-        self.clear_signal.connect(self.clear)
-        
-        print("✅ 新文本输入框初始化完成")
-
-    def _set_initial_position(self):
-        """智能设置初始位置，支持多显示器环境"""
-        try:
-            # 初始化时，截图区域坐标可能还未设置，所以只做基础定位
-            # 主要的智能定位会在_smart_reposition_before_show中进行
-            
-            # 使用鼠标当前位置确定显示器
-            cursor_pos = QCursor.pos()
-            parent_center_x = cursor_pos.x()
-            parent_center_y = cursor_pos.y()
-            print(f"📍 初始化时使用鼠标位置: ({parent_center_x}, {parent_center_y})")
-            
-            # 找到包含该点的显示器
-            target_screen = None
-            for screen in QApplication.screens():
-                screen_rect = screen.geometry()
-                if screen_rect.contains(parent_center_x, parent_center_y):
-                    target_screen = screen
-                    break
-            
-            if target_screen is None:
-                target_screen = QApplication.primaryScreen()
-            
-            # 在目标显示器中设置一个临时位置，真正的智能定位在显示时进行
-            screen_rect = target_screen.availableGeometry()
-            initial_x = screen_rect.x() + screen_rect.width() // 3
-            initial_y = screen_rect.y() + screen_rect.height() // 3
-            
-            self.setGeometry(initial_x, initial_y, 100, 100)
-            print(f"📍 OCR窗口临时位置: 显示器{target_screen.name()} ({initial_x}, {initial_y})")
-            
-        except Exception as e:
-            print(f"⚠️ 设置初始位置失败，使用默认位置: {e}")
-            # 出错时使用主显示器中心
-            desktop = QApplication.desktop()
-            self.setGeometry(desktop.width()//2, desktop.height()//2, 100, 100)
-
-    def _smart_reposition_before_show(self):
-        """在显示前智能重新定位窗口"""
-        try:
-            # 尝试从父窗口获取当前截图区域的显示器信息
-            target_screen = None
-            
-            if self._parent_widget:
-                # 如果有父窗口，尝试获取截图区域信息
-                if hasattr(self._parent_widget, 'x0') and hasattr(self._parent_widget, 'y0'):
-                    # 获取截图区域的中心点
-                    center_x = (self._parent_widget.x0 + self._parent_widget.x1) // 2
-                    center_y = (self._parent_widget.y0 + self._parent_widget.y1) // 2
-                    
-                    # 找到包含截图区域的显示器
-                    for screen in QApplication.screens():
-                        screen_rect = screen.geometry()
-                        if screen_rect.contains(center_x, center_y):
-                            target_screen = screen
-                            break
-            
-            if target_screen is None:
-                # 使用鼠标当前位置确定显示器
-                cursor_pos = QCursor.pos()
-                for screen in QApplication.screens():
-                    screen_rect = screen.geometry()
-                    if screen_rect.contains(cursor_pos):
-                        target_screen = screen
-                        break
-            
-            if target_screen is None:
-                target_screen = QApplication.primaryScreen()
-            
-            # 获取目标显示器的可用区域
-            screen_rect = target_screen.availableGeometry()  # 使用availableGeometry排除任务栏等
-            screen_x, screen_y, screen_w, screen_h = screen_rect.getRect()
-            
-            # 检查当前位置是否在目标显示器内
-            current_right = self.x() + self.width()
-            current_bottom = self.y() + self.height()
-            
-            if not (screen_x <= self.x() < screen_x + screen_w and 
-                   screen_y <= self.y() < screen_y + screen_h and
-                   current_right <= screen_x + screen_w and
-                   current_bottom <= screen_y + screen_h):
-                
-                # 窗口不在目标显示器内，重新定位
-                # 优先显示在截图区域附近，但确保在屏幕边界内
-                if (self._parent_widget and 
-                    hasattr(self._parent_widget, 'x0') and 
-                    hasattr(self._parent_widget, 'y0') and
-                    self._parent_widget.x0 > 0 and self._parent_widget.y0 > 0):  # 检查坐标是否有效
-                    
-                    # 尝试在截图区域右下角显示
-                    preferred_x = max(self._parent_widget.x0, self._parent_widget.x1) + 10
-                    preferred_y = max(self._parent_widget.y0, self._parent_widget.y1) + 10
-                    
-                    # 确保在屏幕边界内
-                    if preferred_x + self.width() > screen_x + screen_w:
-                        preferred_x = screen_x + screen_w - self.width() - 20
-                    if preferred_y + self.height() > screen_y + screen_h:
-                        preferred_y = screen_y + screen_h - self.height() - 20
-                    
-                    # 确保不小于屏幕起始位置
-                    preferred_x = max(preferred_x, screen_x + 10)
-                    preferred_y = max(preferred_y, screen_y + 10)
-                    
-                    print(f"📍 基于有效截图区域重新定位: ({preferred_x}, {preferred_y})")
-                    
-                else:
-                    # 截图区域坐标无效或不存在，使用屏幕中心偏右下
-                    preferred_x = screen_x + screen_w * 2 // 3
-                    preferred_y = screen_y + screen_h * 2 // 3
-                    print(f"📍 使用默认重新定位: ({preferred_x}, {preferred_y})")
-                
-                print(f"📍 重新定位OCR窗口到显示器{target_screen.name()}: ({preferred_x}, {preferred_y})")
-                self.move(preferred_x, preferred_y)
-            else:
-                print(f"📍 OCR窗口已在正确显示器内，无需重新定位")
-                
-        except Exception as e:
-            print(f"⚠️ 智能重新定位失败: {e}")
-
-    def _create_toolbar(self):
-        """创建工具栏"""
-        self.toolbar = QWidget()
-        self.toolbar.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        
-        # 设置工具栏背景样式
-        toolbar_bg_style = """
-            QWidget {
-                background-color: rgba(248, 249, 250, 0.98);
-                border: 2px solid #3498db;
-                border-radius: 12px;
-            }
-        """
-        self.toolbar.setStyleSheet(toolbar_bg_style)
-        
-        # 创建布局 - 增加间距，确保按钮不挤在一起
-        layout = QHBoxLayout(self.toolbar)
-        layout.setContentsMargins(20, 12, 20, 12)  # 增加边距
-        layout.setSpacing(15)  # 增加按钮间距
-        
-        # 统一按钮样式 - 更加合适的尺寸和字体
-        btn_base_style = """
-            QPushButton {
-                background-color: rgba(52, 152, 219, 0.95);
-                color: white;
-                border: 1px solid #2980b9;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 10pt;
-                font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                padding: 8px 14px;
-                min-width: 65px;
-                max-width: 85px;
-                min-height: 34px;
-                max-height: 38px;
-            }
-            QPushButton:hover {
-                background-color: rgba(41, 128, 185, 0.95);
-                border: 1px solid #1f5f85;
-            }
-            QPushButton:pressed {
-                background-color: rgba(31, 95, 133, 0.95);
-            }
-        """
-        
-        # 创建按钮 - 使用短小精悍的日语文本
-        # 复制按钮
-        self.copy_btn = QPushButton("コピー")
-        self.copy_btn.setStyleSheet(btn_base_style)
-        self.copy_btn.clicked.connect(self.copy_text)
-        self.copy_btn.setToolTip('テキストをクリップボードにコピー')
-        
-        # 清空按钮
-        self.clear_btn = QPushButton("クリア")
-        self.clear_btn.setStyleSheet(btn_base_style)
-        self.clear_btn.clicked.connect(self.clear)
-        self.clear_btn.setToolTip('テキスト内容をクリア')
-        
-        # 关闭按钮 - 特殊颜色和稍微大一点的字体
-        self.close_btn = QPushButton("閉じる")
-        close_btn_style = """
-            QPushButton {
-                background-color: rgba(220, 53, 69, 0.95);
-                color: white;
-                border: 1px solid #c82333;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 10pt;
-                font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                padding: 8px 14px;
-                min-width: 65px;
-                max-width: 85px;
-                min-height: 34px;
-                max-height: 38px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 35, 51, 0.95);
-                border: 1px solid #a71e2a;
-            }
-            QPushButton:pressed {
-                background-color: rgba(167, 30, 42, 0.95);
-            }
-        """
-        self.close_btn.setStyleSheet(close_btn_style)
-        self.close_btn.clicked.connect(self.close_completely)
-        self.close_btn.setToolTip('OCR識別ウィンドウを閉じる')
-        
-        # 添加按钮到布局
-        layout.addWidget(self.copy_btn)
-        layout.addWidget(self.clear_btn)
-        layout.addWidget(self.close_btn)
-        
-        # 设置工具栏大小 - 适应更大的按钮和间距
-        self.toolbar.setFixedSize(320, 62)
-
-    def auto_resize(self):
-        """自动调整大小 - 简化版本"""
-        text = self.toPlainText()
-        
-        # 获取文档尺寸
-        doc = self.document()
-        doc.adjustSize()
-        doc_size = doc.size()
-        
-        # 计算新尺寸
-        padding = 50  # 内边距
-        min_width, min_height = 300, 150
-        max_width, max_height = 800, 600
-        
-        new_width = max(min_width, min(max_width, int(doc_size.width()) + padding))
-        
-        if text.strip():
-            # 有文本：使用2.5倍高度确保足够空间
-            calculated_height = int(doc_size.height() * 2.5) + padding
-            new_height = max(min_height, min(max_height, calculated_height))
-        else:
-            # 空文本：使用最小高度
-            new_height = min_height
-        
-        # 应用新尺寸
-        old_size = self.size()
-        self.setFixedSize(new_width, new_height)
-        
-        print(f"� 文本框自动调整: {old_size.width()}x{old_size.height()} → {new_width}x{new_height}")
-        print(f"   文本长度: {len(text)}, 文档尺寸: {doc_size.width()}x{doc_size.height()}")
-        
-        # 保持在屏幕内
-        self._keep_in_screen()
-        
-        # 更新工具栏位置
-        self._update_toolbar_position()
-        
-        # 强制更新
-        self.update()
-        QApplication.processEvents()
-
-    def _keep_in_screen(self):
-        """保持窗口在屏幕范围内"""
-        screen = QApplication.desktop().screenGeometry()
-        x, y = self.x(), self.y()
-        w, h = self.width(), self.height()
-        
-        if x + w > screen.width():
-            x = screen.width() - w - 20
-        if y + h > screen.height():
-            y = screen.height() - h - 20
-        if x < 10:
-            x = 10
-        if y < 10:
-            y = 10
-            
-        self.move(x, y)
-
-    def _update_toolbar_position(self):
-        """更新工具栏位置"""
-        if hasattr(self, 'toolbar') and self.isVisible():
-            # 工具栏放在文本框下方中央
-            toolbar_x = self.x() + (self.width() - self.toolbar.width()) // 2
-            toolbar_y = self.y() + self.height() + 10
-            
-            # 确保工具栏在屏幕内
-            screen = QApplication.desktop().screenGeometry()
-            if toolbar_x + self.toolbar.width() > screen.width():
-                toolbar_x = screen.width() - self.toolbar.width() - 10
-            if toolbar_y + self.toolbar.height() > screen.height():
-                toolbar_y = self.y() - self.toolbar.height() - 10
-                
-            self.toolbar.move(toolbar_x, toolbar_y)
-
-    def copy_text(self):
-        """复制文本到剪贴板"""
-        text = self.toPlainText().strip()
-        if text:
-            clipboard = QApplication.clipboard()
-            clipboard.setText(text)
-            # 显示复制成功提示 - 适配按钮字体大小
-            original_placeholder = self.placeholderText()
-            self.setPlaceholderText("✓ クリップボードにコピーしました")
-            
-            # 临时调整提示文字样式
-            temp_style = """
-                FramelessEnterSendQTextEdit {
-                    background-color: rgba(255, 255, 255, 0.98);
-                    border: 2px solid #28a745;
-                    border-radius: 12px;
-                    padding: 15px;
-                    font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                    font-size: 11pt;
-                    color: #28a745;
-                    selection-background-color: #3498db;
-                    line-height: 1.4;
-                }
-            """
-            self.setStyleSheet(temp_style)
-            
-            # 2秒后恢复
-            import weakref
-            weak_self = weakref.ref(self)
-            def restore_style():
-                obj = weak_self()
-                if obj is not None:
-                    obj.setPlaceholderText(original_placeholder)
-                    obj.setStyleSheet("""
-                        FramelessEnterSendQTextEdit {
-                            background-color: rgba(255, 255, 255, 0.98);
-                            border: 2px solid #3498db;
-                            border-radius: 12px;
-                            padding: 15px;
-                            font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                            font-size: 11pt;
-                            color: #2c3e50;
-                            selection-background-color: #3498db;
-                            line-height: 1.4;
-                        }
-                    """)
-            QTimer.singleShot(2000, restore_style)
-            print(f"✅ 文本已复制到剪贴板: {len(text)} 字符")
-        else:
-            self.setPlaceholderText("コピーするテキストがありません")
-            # 使用弱引用避免对象被删除时的错误
-            import weakref
-            weak_self = weakref.ref(self)
-            def reset_placeholder():
-                obj = weak_self()
-                if obj is not None:
-                    obj.setPlaceholderText("OCR認識結果...")
-            QTimer.singleShot(2000, reset_placeholder)
-
-    def close_completely(self):
-        """完全关闭"""
-        if self._parent_widget and hasattr(self._parent_widget, 'cleanup_ocr_state'):
-            self._parent_widget.cleanup_ocr_state()
-        self.hide()
-
-    def show(self):
-        """显示窗口"""
-        super().show()
-        if hasattr(self, 'toolbar'):
-            self.toolbar.show()
-            self._update_toolbar_position()
-        self.activateWindow()
-        self.raise_()
-        self.setFocus()
-
-    def hide(self):
-        """隐藏窗口"""
-        if hasattr(self, 'toolbar'):
-            self.toolbar.hide()
-        super().hide()
-
-    def move(self, x, y):
-        """移动窗口"""
-        super().move(x, y)
-        self._update_toolbar_position()
-
-    def insertPlainText(self, text):
-        """插入文本"""
-        super().insertPlainText(text)
-        self.show()
-
-    def keyPressEvent(self, e):
-        """键盘事件"""
-        if e.key() == Qt.Key_Return or e.key() == Qt.Key_Enter:
-            if e.modifiers() & Qt.ControlModifier:
-                # Ctrl+Enter: 完成输入
-                self.action()
-                return
-            else:
-                # Enter: 换行
-                super().keyPressEvent(e)
-                return
-        
-        super().keyPressEvent(e)
-        
-        # 历史记录快捷键
-        if e.key() == Qt.Key_Left and e.modifiers() == Qt.ControlModifier:
-            self.last_history()
-        elif e.key() == Qt.Key_Right and e.modifiers() == Qt.ControlModifier:
-            self.next_history()
-        elif e.key() == Qt.Key_S and e.modifiers() == Qt.ControlModifier:
-            self.addhistory()
-
-    def closeEvent(self, e):
-        """关闭事件"""
-        if hasattr(self, 'toolbar'):
-            self.toolbar.close()
-        super().closeEvent(e)
-
-    # 历史记录方法
-    def addhistory(self):
-        text = self.toPlainText()
-        if text not in self.history and len(text.replace(" ", "").replace("\n", "")):
-            self.history.append(text)
-            mode = "r+" if os.path.exists(self.hsp) else "w+"
-            with open(self.hsp, mode, encoding="utf-8") as f:
-                hislist = f.read().split("<\n\n<<>>\n\n>")
-                hislist.append(text)
-                if len(hislist) > 20:
-                    hislist = hislist[-20:]
-                    self.history = self.history[-20:]
-                newhis = "<\n\n<<>>\n\n>".join(hislist)
-                f.seek(0)
-                f.truncate()
-                f.write(newhis)
-            self.history_pos = len(self.history)
-
-    def keyenter_connect(self, action):
-        self.action = action
-
-    def next_history(self):
-        if self.history_pos < len(self.history) - 1:
-            hp = self.history_pos
-            self.clear()
-            self.history_pos = hp + 1
-            self.setText(self.history[self.history_pos])
-
-    def last_history(self):
-        hp = self.history_pos
-        self.addhistory()
-        self.history_pos = hp
-        if self.history_pos > 0:
-            hp = self.history_pos
-            self.clear()
-            self.history_pos = hp - 1
-            self.setText(self.history[self.history_pos])
-
-    def clear(self, notsave=False):
-        save = not notsave
-        if save:
-            self.addhistory()
-        self.history_pos = len(self.history)
-        super().clear()
-        # 设置现代化样式
-        self.setStyleSheet("""
-            FramelessEnterSendQTextEdit {
-                background-color: rgba(255, 255, 255, 0.95);
-                border: 2px solid #e1e5e9;
-                border-radius: 12px;
-                padding: 12px;
-                font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-                font-size: 11pt;
-                color: #2c3e50;
-                selection-background-color: #3498db;
-            }
-            QPushButton {
-                background-color: rgba(248, 249, 250, 0.9);
-                border: 1px solid #dee2e6;
-                border-radius: 8px;
-                color: #495057;
-                font-weight: 500;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                background-color: rgba(233, 236, 239, 0.9);
-                border-color: #adb5bd;
-            }
-            QPushButton:pressed {
-                background-color: rgba(222, 226, 230, 0.9);
-            }
-        """)
-        
-        # 智能初始位置设置 - 支持多显示器环境
-        self._set_initial_position()
-        self.menu_size = 32
-        self.button_spacing = 4
-        
-        # 创建工具栏容器
-        self.toolbar = QWidget()
-        self.toolbar.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.toolbar.setStyleSheet("""
-            QWidget {
-                background-color: rgba(255, 255, 255, 0.95);
-                border: 1px solid #e1e5e9;
-                border-radius: 8px;
-            }
-        """)
-        
-        # 创建按钮
-        self._create_buttons()
-        
-        # 布局工具栏
-        self._layout_toolbar()
-        
-        # 设置工具提示
-        self.setToolTip('OCR文字認識結果、編集可能\nEnterキーで改行、Ctrl+Enterで入力完了')
-        self.clear_signal.connect(self.clear)
-        self.textAreaChanged()
-        self.activateWindow()
-        self.setFocus()
-
-        # 处理enter_tra参数（保持向后兼容）
-        if self.enter_tra:
-            self.action = self.show  # 新版本不再支持翻译功能
-
-    def _create_buttons(self):
-        """创建按钮"""
-        # 关闭按钮 - 真正结束OCR功能
-        self.close_button = QPushButton('✕', self.toolbar)
-        self.close_button.setToolTip('OCR認識を終了して閉じる')
-        self.close_button.setFixedSize(self.menu_size, self.menu_size)
-        self.close_button.clicked.connect(self.close_ocr_completely)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(220, 53, 69, 0.9);
-                color: white;
-                border: 1px solid #dc3545;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 12pt;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 35, 51, 0.9);
-            }
-        """)
-
-        # 复制按钮
-        self.copy_button = QPushButton('📋', self.toolbar)
-        self.copy_button.setToolTip('テキストをクリップボードにコピー')
-        self.copy_button.setFixedSize(self.menu_size, self.menu_size)
-        self.copy_button.clicked.connect(self.copy_text)
-        self.copy_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(40, 167, 69, 0.9);
-                color: white;
-                border: 1px solid #28a745;
-                border-radius: 6px;
-                font-size: 11pt;
-            }
-            QPushButton:hover {
-                background-color: rgba(34, 134, 58, 0.9);
-            }
-        """)
-
-        # 清空按钮
-        self.clear_button = QPushButton('🗑', self.toolbar)
-        self.clear_button.setToolTip('テキスト内容をクリア')
-        self.clear_button.setFixedSize(self.menu_size, self.menu_size)
-        self.clear_button.clicked.connect(self.clear)
-        self.clear_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 193, 7, 0.9);
-                color: #212529;
-                border: 1px solid #ffc107;
-                border-radius: 6px;
-                font-size: 11pt;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 176, 6, 0.9);
-            }
-        """)
-
-        # 历史按钮
-        self.history_prev_button = QPushButton('◀', self.toolbar)
-        self.history_prev_button.setToolTip('前の履歴記録 (Ctrl+←)')
-        self.history_prev_button.setFixedSize(self.menu_size//2 + 2, self.menu_size//2 + 2)
-        self.history_prev_button.clicked.connect(self.last_history)
-        
-        self.history_next_button = QPushButton('▶', self.toolbar)
-        self.history_next_button.setToolTip('次の履歴記録 (Ctrl+→)')
-        self.history_next_button.setFixedSize(self.menu_size//2 + 2, self.menu_size//2 + 2)
-        self.history_next_button.clicked.connect(self.next_history)
-        
-        # 历史按钮样式
-        history_style = """
-            QPushButton {
-                background-color: rgba(108, 117, 125, 0.9);
-                color: white;
-                border: 1px solid #6c757d;
-                border-radius: 4px;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                background-color: rgba(90, 98, 104, 0.9);
-            }
-        """
-        self.history_prev_button.setStyleSheet(history_style)
-        self.history_next_button.setStyleSheet(history_style)
-
-    def _layout_toolbar(self):
-        """布局工具栏"""
-        from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
-        
-        # 创建主要按钮布局
-        main_layout = QHBoxLayout(self.toolbar)
-        main_layout.setContentsMargins(8, 6, 8, 6)
-        main_layout.setSpacing(self.button_spacing)
-        
-        main_layout.addWidget(self.close_button)
-        main_layout.addWidget(self.copy_button)
-        main_layout.addWidget(self.clear_button)
-        
-        # 历史按钮垂直布局
-        history_layout = QVBoxLayout()
-        history_layout.setContentsMargins(0, 0, 0, 0)
-        history_layout.setSpacing(2)
-        history_layout.addWidget(self.history_prev_button)
-        history_layout.addWidget(self.history_next_button)
-        
-        main_layout.addLayout(history_layout)
-        
-        # 计算工具栏大小
-        toolbar_width = (self.menu_size * 3 + self.menu_size//2 + 2 + 
-                        self.button_spacing * 3 + 16)
-        toolbar_height = self.menu_size + 12
-        self.toolbar.setFixedSize(toolbar_width, toolbar_height)
-
-    def close_ocr_completely(self):
-        """完全关闭OCR功能"""
-        # 发送信号通知父级清理OCR状态
-        if self._parent_widget and hasattr(self._parent_widget, 'cleanup_ocr_state'):
-            self._parent_widget.cleanup_ocr_state()
-        
-        # 隐藏工具栏和文本框
-        self.toolbar.hide()
-        self.hide()
-
-    def move(self, x, y, active=False):
-        """移动时同时移动工具栏，智能避免遮挡"""
-        super().move(x, y)
-        if hasattr(self, 'toolbar'):
-            self._position_toolbar_smartly()
-
-    def _position_toolbar_smartly(self):
-        """智能定位工具栏，避免与文字窗口遮挡"""
-        if not hasattr(self, 'toolbar'):
-            return
-            
-        # 获取当前屏幕信息
-        screens = QApplication.screens()
-        current_screen = QApplication.primaryScreen()
-        
-        # 找到文字窗口所在的屏幕
-        text_center_x = self.x() + self.width() // 2
-        text_center_y = self.y() + self.height() // 2
-        
-        for screen in screens:
-            geometry = screen.geometry()
-            if (text_center_x >= geometry.x() and text_center_x < geometry.x() + geometry.width() and
-                text_center_y >= geometry.y() and text_center_y < geometry.y() + geometry.height()):
-                current_screen = screen
-                break
-        
-        screen_rect = current_screen.geometry()
-        toolbar_width = self.toolbar.width()
-        toolbar_height = self.toolbar.height()
-        
-        # 文字窗口的边界
-        text_left = self.x()
-        text_right = self.x() + self.width()
-        text_top = self.y()
-        text_bottom = self.y() + self.height()
-        
-        # 尝试不同的工具栏位置（优先级从高到低）
-        positions = [
-            # 1. 右上角（文字窗口右侧，上方对齐）
-            (text_right + 12, text_top - 5),
-            # 2. 左上角（文字窗口左侧，上方对齐）
-            (text_left - toolbar_width - 12, text_top - 5),
-            # 3. 上方中央（文字窗口上方）
-            (text_left + (self.width() - toolbar_width) // 2, text_top - toolbar_height - 10),
-            # 4. 右下角（文字窗口右侧，下方对齐）
-            (text_right + 12, text_bottom - toolbar_height + 5),
-            # 5. 左下角（文字窗口左侧，下方对齐）
-            (text_left - toolbar_width - 12, text_bottom - toolbar_height + 5),
-            # 6. 下方中央（文字窗口下方）
-            (text_left + (self.width() - toolbar_width) // 2, text_bottom + 10),
-        ]
-        
-        # 选择第一个在屏幕范围内且不与钉图窗口重叠的位置
-        for toolbar_x, toolbar_y in positions:
-            # 检查是否在屏幕范围内
-            if (toolbar_x >= screen_rect.x() + 5 and 
-                toolbar_y >= screen_rect.y() + 5 and
-                toolbar_x + toolbar_width <= screen_rect.x() + screen_rect.width() - 5 and
-                toolbar_y + toolbar_height <= screen_rect.y() + screen_rect.height() - 5):
-                
-                # 检查是否与钉图窗口重叠
-                overlaps_with_pinned = False
-                for widget in QApplication.allWidgets():
-                    if isinstance(widget, Freezer) and widget.isVisible():
-                        if (toolbar_x < widget.x() + widget.width() and
-                            toolbar_x + toolbar_width > widget.x() and
-                            toolbar_y < widget.y() + widget.height() and
-                            toolbar_y + toolbar_height > widget.y()):
-                            overlaps_with_pinned = True
-                            break
-                
-                if not overlaps_with_pinned:
-                    self.toolbar.move(toolbar_x, toolbar_y)
-                    return
-        
-        # 如果所有位置都不合适，使用默认位置（右侧，但调整到屏幕范围内）
-        default_x = min(text_right + 12, screen_rect.x() + screen_rect.width() - toolbar_width - 5)
-        default_y = max(screen_rect.y() + 5, min(text_top, screen_rect.y() + screen_rect.height() - toolbar_height - 5))
-        
-        # 最后检查默认位置是否与钉图窗口重叠，如果重叠则放到屏幕右上角
-        overlaps_default = False
-        for widget in QApplication.allWidgets():
-            if isinstance(widget, Freezer) and widget.isVisible():
-                if (default_x < widget.x() + widget.width() and
-                    default_x + toolbar_width > widget.x() and
-                    default_y < widget.y() + widget.height() and
-                    default_y + toolbar_height > widget.y()):
-                    overlaps_default = True
-                    break
-        
-        if overlaps_default:
-            # 放到屏幕右上角
-            default_x = screen_rect.x() + screen_rect.width() - toolbar_width - 10
-            default_y = screen_rect.y() + 10
-        
-        self.toolbar.move(default_x, default_y)
-
-    def show(self):
-        """显示时同时显示工具栏，并智能定位到合适的显示器"""
-        # 在显示前重新定位窗口到合适的位置
-        self._smart_reposition_before_show()
-        
-        super().show()
-        if hasattr(self, 'toolbar'):
-            self.toolbar.show()
-            self.move(self.x(), self.y())  # 更新工具栏位置
-
-    def hide(self):
-        """隐藏时同时隐藏工具栏"""
-        if hasattr(self, 'toolbar'):
-            self.toolbar.hide()
-        super().hide()
-    def move_signal_callback(self, x, y):
-        """工具栏移动回调（保留兼容性）"""
-        if hasattr(self, 'toolbar'):
-            new_x = x - self.width() - 8
-            if self.x() != new_x or self.y() != y:
-                self.move(new_x, y)
-    def copy_text(self):
-        """复制文本到剪贴板"""
-        text = self.toPlainText().strip()
-        if text:
-            clipboard = QApplication.clipboard()
-            clipboard.setText(text)
-            # 显示复制成功提示
-            self.setPlaceholderText("クリップボードにコピーしました ✓")
-            # 使用弱引用避免对象被删除时的错误
-            import weakref
-            weak_self = weakref.ref(self)
-            def reset_placeholder():
-                obj = weak_self()
-                if obj is not None:
-                    obj.setPlaceholderText("OCR認識結果...")
-            QTimer.singleShot(2000, reset_placeholder)
-
-    def textAreaChanged(self, minsize=200, recheck=True, border=40):
-        """根据文本内容自动调整窗口大小（修正版）"""
-        print(f"🚨🚨🚨 textAreaChanged 被调用了！！！ border={border}, recheck={recheck} 🚨🚨🚨")
-        self.document().adjustSize()
-
-        # ===== 1. 基础内容高度 =====
-        newWidth = self.document().size().width() + border
-        original_doc_height = self.document().size().height()
-        newHeight = original_doc_height * 2.0 + border // 2  # 改为2倍，效果更明显
-
-        # ===== 2. 修正：额外计算 padding 和 margin =====
-        fm = self.fontMetrics()
-        line_height = fm.lineSpacing()         # 单行高度
-        padding = 12                           # 来自 QSS: padding:12px
-        margin = int(self.document().documentMargin())  # 文档边距
-        extra = padding * 2 + margin * 2
-
-        # 如果文本为空，至少给一行的高度，但仍应用1.2倍系数
-        text_content = self.toPlainText()
-        if not text_content.strip():
-            # 空文本时，取较大值：要么是1.2倍计算结果，要么是最小行高
-            min_empty_height = line_height + extra
-            calculated_height = newHeight + extra
-            newHeight = max(min_empty_height, calculated_height)
-            if recheck:
-                print(f"   🔤 空文本处理: min_empty={min_empty_height}, calculated={calculated_height}, 选择={newHeight}")
-        else:
-            newHeight = newHeight + extra
-            if recheck:
-                print(f"   🔤 有文本处理: 原始={original_doc_height * 1.2 + border // 2}, 加extra后={newHeight}")
-            
-        # 调试信息
-        if recheck:  # 只在第一次调用时打印，避免重复
-            print(f"🔍 高度计算调试:")
-            print(f"   原始文档高度: {original_doc_height}")
-            print(f"   1.2倍: {original_doc_height * 1.2}")
-            print(f"   border//2: {border // 2}")
-            print(f"   初步newHeight: {original_doc_height * 1.2 + border // 2}")
-            print(f"   extra补偿: {extra}")
-            print(f"   最终newHeight: {newHeight}")
-            print(f"   文本内容: '{text_content}' (长度: {len(text_content)})")
-            print(f"   当前窗口高度: {self.height()}")
-            print(f"   minsize: {minsize}, min_height将是: {max(minsize // 4, 50)}")
-
-        # ===== 3. 获取屏幕信息 =====
-        current_screen = None
-        screens = QApplication.screens()
-        for screen in screens:
-            screen_rect = screen.geometry().getRect()
-            screen_x, screen_y, screen_w, screen_h = screen_rect
-            window_center_x = self.x() + self.width() // 2
-            window_center_y = self.y() + self.height() // 2
-            if (screen_x <= window_center_x < screen_x + screen_w and
-                screen_y <= window_center_y < screen_y + screen_h):
-                current_screen = screen
-                break
-
-        if current_screen is None:
-            current_screen = QApplication.primaryScreen()
-
-        screen_rect = current_screen.geometry().getRect()
-        screen_x, screen_y, screen_w, screen_h = screen_rect
-
-        # ===== 4. 限制范围 =====
-        min_width = max(minsize, 150)
-        min_height = max(minsize // 4, 100)  # 最小高度从50增加到100
-
-        # 宽度调整
-        if newWidth < min_width:
-            self.setFixedWidth(min_width)
-        elif newWidth > screen_w // 2:
-            self.setFixedWidth(screen_w // 2 + border)
-        else:
-            self.setFixedWidth(newWidth)
-
-        # 高度调整
-        if recheck:  # 调试信息
-            print(f"   📏 高度调整前: newHeight={newHeight}, min_height={min_height}")
-        
-        if newHeight < min_height:
-            if recheck:
-                print(f"   ⚠️  高度被限制到最小值: {newHeight} -> {min_height}")
-            self.setFixedHeight(min_height)
-            if recheck:
-                print(f"   🔧 setFixedHeight({min_height}) 调用完成，当前实际高度: {self.height()}")
-        elif newHeight > screen_h * 2 // 3:
-            max_height = screen_h * 2 // 3 + 15
-            if recheck:
-                print(f"   ⚠️  高度被限制到最大值: {newHeight} -> {max_height}")
-            self.setFixedHeight(max_height)
-            if recheck:
-                print(f"   🔧 setFixedHeight({max_height}) 调用完成，当前实际高度: {self.height()}")
-        else:
-            if recheck:
-                print(f"   ✅ 设置高度为: {newHeight}")
-            self.setFixedHeight(int(newHeight))
-            if recheck:
-                print(f"   🔧 setFixedHeight({int(newHeight)}) 调用完成，当前实际高度: {self.height()}")
-                print(f"   🔧 窗口几何: x={self.x()}, y={self.y()}, w={self.width()}, h={self.height()}")
-                print(f"   🔧 是否可见: {self.isVisible()}")
-                # 如果窗口不可见，强制显示
-                if not self.isVisible():
-                    print(f"   🔧 窗口不可见，强制显示...")
-                    self.show()
-                    print(f"   🔧 强制显示后是否可见: {self.isVisible()}")
-                # 强制刷新界面
-                self.update()
-                self.repaint()
-                QApplication.processEvents()
-
-        # ===== 5. 智能边界检查 - 支持多显示器环境 =====
-        self._adjust_position_for_multi_screen(screen_x, screen_y, screen_w, screen_h, border)
-
-        # ===== 6. 再次校准 =====
-        if recheck:
-            self.textAreaChanged(recheck=False)
-
-        self.adjustBotton()
-
-    def _adjust_position_for_multi_screen(self, current_screen_x, current_screen_y, current_screen_w, current_screen_h, border):
-        """智能调整窗口位置，支持多显示器环境"""
-        window_right = self.x() + self.width()
-        window_bottom = self.y() + self.height()
-        
-        # 检查窗口是否完全在某个显示器内
-        is_in_any_screen = False
-        for screen in QApplication.screens():
-            screen_rect = screen.geometry()
-            screen_x, screen_y, screen_w, screen_h = screen_rect.getRect()
-            
-            # 如果窗口完全在这个显示器内，则不需要调整
-            if (self.x() >= screen_x and 
-                self.y() >= screen_y and 
-                window_right <= screen_x + screen_w and 
-                window_bottom <= screen_y + screen_h):
-                is_in_any_screen = True
-                print(f"📍 OCR窗口完全在显示器{screen.name()}内，无需调整位置")
-                break
-        
-        if not is_in_any_screen:
-            # 窗口不在任何显示器内或跨越多个显示器，需要调整
-            # 优先调整到当前显示器（通常是截图所在的显示器）
-            new_x = self.x()
-            new_y = self.y()
-            
-            # 水平位置调整
-            if window_right > current_screen_x + current_screen_w:
-                new_x = current_screen_x + current_screen_w - border - self.width()
-            elif self.x() < current_screen_x:
-                new_x = current_screen_x + border
-                
-            # 垂直位置调整
-            if window_bottom > current_screen_y + current_screen_h:
-                new_y = current_screen_y + current_screen_h - border - self.height()
-            elif self.y() < current_screen_y:
-                new_y = current_screen_y + border
-            
-            # 确保调整后的位置是有效的
-            if new_x != self.x() or new_y != self.y():
-                print(f"📍 调整OCR窗口位置: ({self.x()}, {self.y()}) -> ({new_x}, {new_y})")
-                self.move(new_x, new_y)
-
-    def adjustBotton(self):
-        """调整工具栏位置（兼容旧版本）"""
-        if hasattr(self, 'toolbar'):
-            # 新版本使用独立工具栏，无需调整
-            pass
-
-    def insertPlainText(self, text):
-        """插入文本并显示窗口"""
-        super(FramelessEnterSendQTextEdit, self).insertPlainText(text)
-        self.show()
-
-    
-
-    def wheelEvent(self, e) -> None:
-        super(FramelessEnterSendQTextEdit, self).wheelEvent(e)
-        angle = e.angleDelta() / 8
-        angle = angle.y()
-        if QApplication.keyboardModifiers() == Qt.ControlModifier:
-            if angle > 0 and self.windowOpacity() < 1:
-                self.setWindowOpacity(self.windowOpacity() + 0.1 if angle > 0 else -0.1)
-            elif angle < 0 and self.windowOpacity() > 0.2:
-                self.setWindowOpacity(self.windowOpacity() - 0.1)
-
-    
-            
-
-    def keyPressEvent(self, e):
-        """处理键盘事件"""
-        # 标记父窗口正在编辑（如果父窗口是Freezer）
-        parent_widget = super().parent()  # 使用正确的parent()方法
-        if hasattr(parent_widget, '_is_editing'):
-            parent_widget._is_editing = True
-        
-        # 处理换行：允许 Enter 键换行，只有 Ctrl+Enter 才结束输入
-        if e.key() == Qt.Key_Return or e.key() == Qt.Key_Enter:
-            if e.modifiers() & Qt.ControlModifier:
-                # Ctrl+Enter: 结束输入，执行动作
-                if hasattr(parent_widget, '_is_editing'):
-                    parent_widget._is_editing = False
-                self.action()
-                return
-            else:
-                # 普通Enter: 插入换行符
-                super(FramelessEnterSendQTextEdit, self).keyPressEvent(e)
-                return
-        
-        # 处理其他按键
-        super(FramelessEnterSendQTextEdit, self).keyPressEvent(e)
-        
-        # 历史记录快捷键
-        if e.key() == Qt.Key_Left and QApplication.keyboardModifiers() == Qt.ControlModifier:
-            self.last_history()
-        elif e.key() == Qt.Key_Right and QApplication.keyboardModifiers() == Qt.ControlModifier:
-            self.next_history()
-        # 保存快捷键
-        elif e.key() == Qt.Key_S and QApplication.keyboardModifiers() == Qt.ControlModifier:
-            print("save")
-            self.addhistory()
-        elif QApplication.keyboardModifiers() not in (Qt.ShiftModifier, Qt.ControlModifier, Qt.AltModifier):
-            self.history_pos = len(self.history)
-        elif QApplication.keyboardModifiers() == Qt.ControlModifier and e.key() == Qt.Key_Left:
-            self.last_history()
-        elif QApplication.keyboardModifiers() == Qt.ControlModifier and e.key() == Qt.Key_Right:
-            self.next_history()
-
-
-    def addhistory(self):
-        text = self.toPlainText()
-        if text not in self.history and len(text.replace(" ", "").replace("\n", "")):
-            self.history.append(text)
-            mode = "r+"
-            if not os.path.exists(self.hsp):
-                mode = "w+"
-            with open(self.hsp, mode, encoding="utf-8")as f:
-                hislist = f.read().split("<\n\n<<>>\n\n>")
-                hislist.append(text)
-                if len(hislist) > 20:
-                    hislist = hislist[-20:]
-                    self.history = self.history[-20:]
-                newhis = "<\n\n<<>>\n\n>".join(hislist)
-                f.seek(0)
-                f.truncate()
-                f.write(newhis)
-            self.history_pos = len(self.history)
-
-    def keyenter_connect(self, action):
-        self.action = action
-
-    def next_history(self):
-        if self.history_pos < len(self.history) - 1:
-            hp = self.history_pos
-            self.clear()
-            self.history_pos = hp + 1
-            self.setText(self.history[self.history_pos])
-        # print("next h", self.history_pos, len(self.history))
-
-    def last_history(self):
-        hp = self.history_pos
-        self.addhistory()
-        self.history_pos = hp
-        if self.history_pos > 0:
-            hp = self.history_pos
-            self.clear()
-            self.history_pos = hp - 1
-            self.setText(self.history[self.history_pos])
-        # print("last h", self.history_pos, len(self.history))
-    def showEvent(self, e):
-        """显示事件"""
-        super().showEvent(e)
-        if hasattr(self, 'toolbar'):
-            self.toolbar.show()
-            
-    def hide(self) -> None:
-        """隐藏时同时隐藏工具栏"""
-        self.addhistory()
-        super(FramelessEnterSendQTextEdit, self).hide()
-        if hasattr(self, 'toolbar'):
-            self.toolbar.hide()
-        if self.autoreset:
-            print('删除', self.autoreset - 1)
-            self.del_myself_signal.emit(self.autoreset - 1)
-            if hasattr(self, 'toolbar'):
-                self.toolbar.close()
-            self.close()
-
-    def closeEvent(self, e) -> None:
-        """关闭事件"""
-        print(f"🔒 [关闭事件] OCR文本窗口关闭事件触发 (autoreset={self.autoreset})")
-        
-        # 清理toolbar
-        if hasattr(self, 'toolbar'):
-            self.toolbar.close()
-            self.toolbar = None
-            
-        # 清理历史记录等资源 - 彻底清理
-        if hasattr(self, 'history'):
-            if isinstance(self.history, list):
-                self.history.clear()
-            self.history = None
-        
-        # 清理其他可能的缓存
-        if hasattr(self, 'history_pos'):
-            self.history_pos = 0
-        
-        super(FramelessEnterSendQTextEdit, self).closeEvent(e)
-        
-        # 延迟删除Qt对象
-        QTimer.singleShot(50, self.deleteLater)
-        
-        print(f"🔒 [关闭事件] OCR文本窗口已标记为删除")
-    def clear(self, notsave=False):
-        save = not notsave
-        if save:
-            self.addhistory()
-        self.history_pos = len(self.history)
-        super(FramelessEnterSendQTextEdit, self).clear()
 class Hung_widget(QLabel):
     button_signal = pyqtSignal(str)
     def __init__(self,parent=None,funcs = []):
@@ -1575,7 +411,7 @@ class PinnedPaintLayer(QLabel):
 
         # 处理文字工具（钉图模式下的文字绘制）- 使用统一的文字绘制组件
         try:
-            from jietuba_text_drawer import UnifiedTextDrawer
+            from jietuba_drawing import UnifiedTextDrawer
             
             if len(self.main_window.drawtext_pointlist) > 0 and hasattr(self.main_window, 'text_box') and self.main_window.text_box.paint:
                 print("钉图模式: 开始处理文字绘制")
@@ -1594,7 +430,7 @@ class PinnedPaintLayer(QLabel):
 
         # ---- 实时文字预览: 在未提交状态下绘制输入中的文字 (不修改底层pixmap) ----
         try:
-            from jietuba_text_drawer import UnifiedTextDrawer
+            from jietuba_drawing import UnifiedTextDrawer
             if (hasattr(self.main_window, 'text_box') and
                 hasattr(self.main_window, 'drawtext_pointlist') and
                 len(self.main_window.drawtext_pointlist) > 0 and
@@ -1609,64 +445,20 @@ class PinnedPaintLayer(QLabel):
             pass
     
     def draw_arrow(self, painter, pointlist):
-        """绘制箭头的通用函数"""
+        """绘制箭头 - 复用 PaintLayer 的优化箭头实现"""
         try:
-            import math
-            start_point = pointlist[0]
-            end_point = pointlist[1]
+            # 直接调用 jietuba_drawing.py 中的优化箭头函数，避免代码重复
+            from jietuba_drawing import PaintLayer
             
-            # 计算箭头的方向和长度
-            dx = end_point[0] - start_point[0]
-            dy = end_point[1] - start_point[1]
-            length = math.sqrt(dx * dx + dy * dy)
-            
-            if length < 5:  # 太短的线段不绘制箭头
-                return
-                
-            # 箭头头部的长度和宽度（根据工具宽度调整）
-            arrow_head_length = max(10, self.main_window.tool_width * 3)
-            arrow_head_width = max(6, self.main_window.tool_width * 2)
-            
-            # 单位向量
-            unit_x = dx / length
-            unit_y = dy / length
-            
-            # 绘制箭头主体线条
-            painter.drawLine(start_point[0], start_point[1], end_point[0], end_point[1])
-            
-            # 计算箭头头部的三个点
-            # 箭头尖端就是终点
-            tip_x = end_point[0]
-            tip_y = end_point[1]
-            
-            # 箭头底部中心点
-            base_x = tip_x - arrow_head_length * unit_x
-            base_y = tip_y - arrow_head_length * unit_y
-            
-            # 箭头底部的两个角点（垂直于箭头方向）
-            perp_x = -unit_y  # 垂直向量
-            perp_y = unit_x
-            
-            left_x = base_x + arrow_head_width * perp_x
-            left_y = base_y + arrow_head_width * perp_y
-            
-            right_x = base_x - arrow_head_width * perp_x
-            right_y = base_y - arrow_head_width * perp_y
-            
-            # 绘制箭头头部（三角形）
-            from PyQt5.QtGui import QPolygon, QBrush
-            from PyQt5.QtCore import QPoint
-            
-            triangle = QPolygon([
-                QPoint(int(tip_x), int(tip_y)),
-                QPoint(int(left_x), int(left_y)),
-                QPoint(int(right_x), int(right_y))
-            ])
-            
-            # 设置填充颜色（与画笔颜色相同）
-            brush = QBrush(painter.pen().color())
-            painter.setBrush(brush)
-            painter.drawPolygon(triangle)
+            # 创建一个临时的 PaintLayer 实例来调用其箭头绘制方法
+            # 注意：这里只是借用其绘制方法，不需要完整初始化
+            temp_layer = PaintLayer.__new__(PaintLayer)
+            temp_layer._draw_optimized_arrow(
+                painter, 
+                pointlist, 
+                painter.pen().color(),
+                self.main_window.tool_width
+            )
             
         except Exception as e:
             print(f"钉图绘制箭头错误: {e}")
@@ -1709,15 +501,11 @@ class Freezer(QLabel):
         self.closed = False  # QPainter安全标记
         
         # 删除原来的侧边工具栏
-        # self.hung_widget = Hung_widget(funcs =[":/exit.png",":/ontop.png",":/OCR.png",":/copy.png",":/saveicon.png"])
         
         self.tips_shower = TipsShower(" ",(QApplication.desktop().width()//2,50,120,50))
         self.tips_shower.hide()
-        self.text_shower = FramelessEnterSendQTextEdit(self, enter_tra=True)
-        self.text_shower.hide()
         self.origin_imgpix = img
         self.showing_imgpix = self.origin_imgpix
-        self.ocr_res_imgpix = None
         self.listpot = listpot
         
         # 检查图像是否有效
@@ -1800,8 +588,6 @@ class Freezer(QLabel):
         # self.hung_widget.show()
         
         self.move(x, y)
-        self.ocr_status = "waiting"
-        self.ocr_res_info = []
         
         # 添加右键菜单状态标志，防止菜单显示时触发工具栏重新布局
         self._context_menu_active = False
@@ -2358,38 +1144,6 @@ class Freezer(QLabel):
             print(f"DPI初始化失败: {e}")
             self._last_dpi = 1.0
 
-    def cleanup_ocr_state(self):
-        """清理OCR状态和识别框"""
-        print("开始清理OCR状态...")
-        
-        # 重置OCR状态
-        self.ocr_status = "waiting"
-        
-        # 停止加载动画
-        if hasattr(self, 'Loading_label'):
-            self.Loading_label.stop()
-        
-        # 隐藏文本显示框及其工具栏
-        if hasattr(self, 'text_shower'):
-            self.text_shower.hide()
-            if hasattr(self.text_shower, 'toolbar'):
-                self.text_shower.toolbar.hide()
-        
-        # 恢复原始图像（清除识别框）
-        self.showing_imgpix = self.origin_imgpix
-        self.setPixmap(self.showing_imgpix.scaled(self.width(), self.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        
-        # 清空OCR结果信息
-        self.ocr_res_info = []
-        self.ocr_res_imgpix = None
-        
-        # 显示提示
-        if hasattr(self, 'tips_shower'):
-            # 移除了已结束OCR识别提示
-            pass
-        
-        print("OCR状态清理完成")
-        
     def ocr(self):
         # OCR功能已移除
         print("⚠️ OCR機能は現在利用できません。")
@@ -2435,26 +1189,7 @@ class Freezer(QLabel):
         # self.text_shower.show()
         # self.text_shower.clear()
         # QApplication.processEvents()
-    def orc_boxes_info_callback(self,text_boxes):
-        if self.ocr_status == "ocr":
-            for tb in text_boxes:
-                tb["select"]=False
-            self.ocr_res_info = text_boxes
-            print("rec orc_boxes_info_callback")
-
-    def det_res_img_callback(self,piximg):
-        if self.ocr_status == "ocr":
-            print("rec det_res_img_callback")
-            self.showing_imgpix = piximg
-            self.ocr_res_imgpix = piximg
-            self.setPixmap(piximg.scaled(self.width(), self.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            
-    def ocr_res_signalhandle(self,text):
-        if self.ocr_status == "ocr":
-            self.text_shower.setPlaceholderText("")
-            self.text_shower.insertPlainText(text)
-            self.Loading_label.stop()
-            self.ocr_status = "show"
+        
     def contextMenuEvent(self, event):
         # 标记右键菜单正在显示，防止其他事件干扰
         self._context_menu_active = True
@@ -2729,10 +1464,6 @@ class Freezer(QLabel):
         # 检测DPI变化并调整窗口大小
         self.check_and_adjust_for_dpi_change()
         
-        # 智能定位OCR文字窗口，避免遮挡
-        if hasattr(self, 'text_shower'):
-            self._position_text_shower_smartly()
-        
         # 如果有主窗口工具栏，更新其位置
         if self.main_window and hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
             # 检查是否有保存的显示器信息，如果没有则重新获取
@@ -2750,75 +1481,6 @@ class Freezer(QLabel):
                     print(f"钉图窗口移动到新显示器: {current_screen.geometry().getRect()}")
             
             self.main_window.position_toolbar_for_pinned_window(self)
-
-    def _position_text_shower_smartly(self):
-        """智能定位OCR文字窗口，避免遮挡"""
-        # 安全检查：确保text_shower存在且有效
-        if not hasattr(self, 'text_shower') or self.text_shower is None:
-            return
-            
-        # 获取当前屏幕信息
-        screens = QApplication.screens()
-        current_screen = QApplication.primaryScreen()
-        
-        # 找到钉图窗口所在的屏幕
-        window_center_x = self.x() + self.width() // 2
-        window_center_y = self.y() + self.height() // 2
-        
-        for screen in screens:
-            geometry = screen.geometry()
-            if (window_center_x >= geometry.x() and window_center_x < geometry.x() + geometry.width() and
-                window_center_y >= geometry.y() and window_center_y < geometry.y() + geometry.height()):
-                current_screen = screen
-                break
-        
-        screen_rect = current_screen.geometry()
-        
-        # 安全地获取文字窗口的预期大小
-        try:
-            text_width = self.text_shower.width() if self.text_shower.width() > 0 else 300
-            text_height = self.text_shower.height() if self.text_shower.height() > 0 else 200
-        except AttributeError:
-            # 如果text_shower已被清理，直接返回
-            return
-        
-        # 钉图窗口的边界
-        img_left = self.x()
-        img_right = self.x() + self.width()
-        img_top = self.y()
-        img_bottom = self.y() + self.height()
-        
-        # 尝试不同的文字窗口位置（优先级从高到低）
-        positions = [
-            # 1. 下方中央（钉图窗口正下方）
-            (img_left + (self.width() - text_width) // 2, img_bottom + 15),
-            # 2. 右下角（钉图窗口右下方）
-            (img_right + 15, img_bottom - text_height + 20),
-            # 3. 左下角（钉图窗口左下方）
-            (img_left - text_width - 15, img_bottom - text_height + 20),
-            # 4. 上方中央（钉图窗口正上方）
-            (img_left + (self.width() - text_width) // 2, img_top - text_height - 15),
-            # 5. 右上角（钉图窗口右上方）
-            (img_right + 15, img_top - 20),
-            # 6. 左上角（钉图窗口左上方）
-            (img_left - text_width - 15, img_top - 20),
-        ]
-        
-        # 选择第一个在屏幕范围内的位置
-        for text_x, text_y in positions:
-            # 检查是否在屏幕范围内
-            if (text_x >= screen_rect.x() + 10 and 
-                text_y >= screen_rect.y() + 10 and
-                text_x + text_width <= screen_rect.x() + screen_rect.width() - 10 and
-                text_y + text_height <= screen_rect.y() + screen_rect.height() - 10):
-                
-                self.text_shower.move(text_x, text_y)
-                return
-        
-        # 如果所有位置都不合适，使用调整后的默认位置
-        default_x = max(screen_rect.x() + 10, min(img_left, screen_rect.x() + screen_rect.width() - text_width - 10))
-        default_y = max(screen_rect.y() + 10, min(img_bottom + 15, screen_rect.y() + screen_rect.height() - text_height - 10))
-        self.text_shower.move(default_x, default_y)
 
     def _force_post_switch_resize(self, scale_changed: bool, new_scale: float):
         """显示器切换后模拟一次滚轮缩放，强制刷新钉图窗口尺寸。"""
@@ -3043,63 +1705,6 @@ class Freezer(QLabel):
             # 重新定位工具栏
             if hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
                 self.main_window.position_toolbar_for_pinned_window(self)
-    def draw_ocr_select_result(self,ids = []):
-        qpixmap = self.ocr_res_imgpix.copy()
-        painter = QPainter(qpixmap)
-        
-        for i,text_box in enumerate(self.ocr_res_info):
-            if i in ids:
-                pen = QPen(QColor(64, 224, 208))
-            else:
-                pen = QPen(Qt.red)
-            pen.setWidth(2) 
-            painter.setPen(pen)
-            contour = text_box["box"]
-            points = []
-            for point in contour:
-                x, y = point
-                points.append(QPoint(x, y))
-            polygon = QPolygon(points + [points[0]])
-            painter.drawPolyline(polygon)
-        painter.end()
-        return qpixmap
-    def check_select_ocr_box(self,x,y):
-        select_ids = []
-        change = False
-        for i,text_box in enumerate(self.ocr_res_info):
-            contour = text_box["box"]
-            dist = cv2.pointPolygonTest(contour, (x,y), False)
-            if dist >= 0:
-                text_box["select"] = ~text_box["select"]
-                change = True
-            if text_box["select"]:
-                select_ids.append(i)
-            
-        return select_ids,change
-    def update_ocr_text(self,ids):
-        match_text_box = []
-        for i,text_box in enumerate(self.ocr_res_info):
-            if i in ids:
-                match_text_box.append(text_box)
-        if hasattr(self,"ocrthread"):
-            res = self.ocrthread.get_match_text(match_text_box)
-            if res is not None:
-                return res
-        return None
-    def update_ocr_select_result(self,x,y):
-        select_ids,changed = self.check_select_ocr_box(x,y)
-        if changed:
-            pix = self.draw_ocr_select_result(ids = select_ids)
-            self.showing_imgpix = pix
-            self.setPixmap(pix.scaled(self.width(), self.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            update_res = self.update_ocr_text(select_ids)
-            if update_res is not None:
-                # 更新结果
-                self.text_shower.move(self.x(), self.y()+self.height()+10)  # 向下移动10像素
-                self.text_shower.show()
-                self.text_shower.clear()
-                self.text_shower.insertPlainText(update_res)
-        return changed
         
     def mousePressEvent(self, event):
         # print(f"钉图鼠标按下调试: 按钮={event.button()}")
@@ -3148,12 +1753,6 @@ class Freezer(QLabel):
         # 重置绘画拖拽标志
         self.is_drawing_drag = False
         if event.button() == Qt.LeftButton:
-            if self.ocr_status=="show":
-                sx,sy = self.origin_imgpix.width()/self.width(),self.origin_imgpix.height()/self.height()
-                realx,realy = event.x()*sx,event.y()*sy
-                changed = self.update_ocr_select_result(realx,realy)
-                if changed:
-                    return
             if event.x() > self.width() - 20 and event.y() > self.height() - 20:
                 self.resize_the_window = True
                 self.setCursor(Qt.SizeFDiagCursor)
@@ -3282,7 +1881,7 @@ class Freezer(QLabel):
         super().leaveEvent(e)
         
         # 隐藏关闭按钮（当鼠标离开窗口时）
-        if hasattr(self, 'close_button'):
+        if hasattr(self, 'close_button') and self.close_button is not None:
             self.close_button.hide()
         
         # 如果右键菜单正在显示，不启动计时器
@@ -3613,12 +2212,62 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理paintlayer时出错: {e}")
         
+        # 清理备份历史（图像数据）
+        if hasattr(self, 'backup_pic_list'):
+            try:
+                self.backup_pic_list.clear()
+                self.backup_pic_list = []
+                print(f"🧹 [内存清理] backup_pic_list已清理")
+            except Exception as e:
+                print(f"⚠️ 清理backup_pic_list时出错: {e}")
+        
+        if hasattr(self, '_original_backup_list'):
+            try:
+                self._original_backup_list.clear()
+                self._original_backup_list = []
+                print(f"🧹 [内存清理] _original_backup_list已清理")
+            except Exception as e:
+                print(f"⚠️ 清理_original_backup_list时出错: {e}")
+        
+        # 清理origin_imgpix（原始图像）
+        if hasattr(self, 'origin_imgpix'):
+            try:
+                self.origin_imgpix = None
+                print(f"🧹 [内存清理] origin_imgpix已清理")
+            except Exception as e:
+                print(f"⚠️ 清理origin_imgpix时出错: {e}")
+        
+        # 清理showing_imgpix（当前显示图像）
+        if hasattr(self, 'showing_imgpix'):
+            try:
+                self.showing_imgpix = None
+                print(f"🧹 [内存清理] showing_imgpix已清理")
+            except Exception as e:
+                print(f"⚠️ 清理showing_imgpix时出错: {e}")
+        
+        # 清理关闭按钮
+        if hasattr(self, 'close_button') and self.close_button:
+            try:
+                self.close_button.deleteLater()
+                self.close_button = None
+                print(f"🧹 [内存清理] close_button已清理")
+            except Exception as e:
+                print(f"⚠️ 清理close_button时出错: {e}")
+        
         # 清理所有可能的子控件
         for child in self.findChildren(QWidget):
             try:
+                child.setParent(None)  # 先解除父子关系
                 child.deleteLater()
             except Exception:
                 pass
+        
+        # 强制处理所有待删除的对象
+        try:
+            QApplication.processEvents()
+            print(f"🧹 [内存清理] Qt事件已处理，待删除对象已清理")
+        except Exception as e:
+            print(f"⚠️ 处理Qt事件时出错: {e}")
         
         # 清理主窗口的文字输入框（如果被独立出来了）
         if self.main_window and hasattr(self.main_window, 'text_box'):
@@ -3652,8 +2301,17 @@ class Freezer(QLabel):
                 print(f"⚠️ 清理主窗口绘画数据时出错: {e}")
         
         # 清理QLabel的pixmap内容
-        self.setPixmap(QPixmap())
-        super().clear()
+        try:
+            self.setPixmap(QPixmap())
+            print(f"🧹 [内存清理] 窗口pixmap已重置为空")
+        except Exception as e:
+            print(f"⚠️ 重置pixmap时出错: {e}")
+        
+        # 清理父类内容
+        try:
+            super().clear()
+        except Exception as e:
+            print(f"⚠️ 调用父类clear时出错: {e}")
         
         # 断开所有引用，避免循环引用
         self.main_window = None
@@ -3662,9 +2320,11 @@ class Freezer(QLabel):
         # 立即强制垃圾回收，不等待系统调度
         import gc
         
-        # 多次垃圾回收确保彻底清理
+        # 多次垃圾回收确保彻底清理（包括循环引用）
         for i in range(3):
             collected = gc.collect()
+            if i == 0 and collected > 0:
+                print(f"🗑️ [垃圾回收] 第{i+1}次回收: 清理了 {collected} 个对象")
             if collected > 0:
                 print(f"🧹 [强制回收] 第{i+1}次垃圾回收释放了 {collected} 个对象")
         

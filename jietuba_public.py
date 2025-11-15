@@ -21,35 +21,23 @@ jietuba_public.py - 公共配置和工具函数模块
 全局变量:
 - CONFIG_DICT: 全局配置字典
 - PLATFORM_SYS: 系统平台标识
-- OCR_AVAILABLE: OCR功能可用性(已禁用)
+
 
 
 依赖模块:
 - PyQt5: GUI框架
-- cv2: OpenCV图像处理
 
 使用方法:
     from jietuba_public import CONFIG_DICT, get_screenshot_save_dir
     save_dir = get_screenshot_save_dir()
 """
 
-import hashlib
-import http.client
 import os
-import random
-import re
 import sys
 import time
-import cv2
-from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QStandardPaths, QTimer, QSettings, QFileInfo, \
-    QUrl, QObject, QSize
-from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QSettings, QSizeF, QStandardPaths, QUrl
-from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QColor, QBrush, QTextDocument, QTextCursor, QDesktopServices,QPixmap
-from PyQt5.QtGui import QPainter, QPen, QIcon, QFont,QImage
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QTextEdit, QWidget
-from urllib.parse import quote
-import numpy as np
+from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QTimer, QSettings
+from PyQt5.QtGui import QColor, QBrush, QPixmap, QPainter, QPen, QFont
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget
 # from fake_useragent import UserAgent  # UA生成器已移除，减小打包体积
 
 # from jietuba_speak import Speaker  # 语音功能已移除，减小打包体积
