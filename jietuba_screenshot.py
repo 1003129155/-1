@@ -825,7 +825,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
-        print("� [颜色预设] 应用红色 #FF0000")
+        
+        # 保存颜色到配置文件
+        current_tool = self.get_current_tool()
+        if current_tool and hasattr(self, 'tool_settings') and current_tool in self.tool_settings:
+            color_value = self.pencolor.name()
+            self.tool_settings[current_tool]['color'] = color_value
+            self.settings.setValue(f'tools/{current_tool}/color', color_value)
+            print(f"🎨 [颜色预设] 应用红色 #FF0000 并保存到 {current_tool}")
+        else:
+            print("🎨 [颜色预设] 应用红色 #FF0000")
 
     def apply_color_preset_yellow(self):
         """应用黄色预设 #FFFF00"""
@@ -834,7 +843,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
-        print("� [颜色预设] 应用黄色 #FFFF00")
+        
+        # 保存颜色到配置文件
+        current_tool = self.get_current_tool()
+        if current_tool and hasattr(self, 'tool_settings') and current_tool in self.tool_settings:
+            color_value = self.pencolor.name()
+            self.tool_settings[current_tool]['color'] = color_value
+            self.settings.setValue(f'tools/{current_tool}/color', color_value)
+            print(f"🎨 [颜色预设] 应用黄色 #FFFF00 并保存到 {current_tool}")
+        else:
+            print("🎨 [颜色预设] 应用黄色 #FFFF00")
 
     def apply_color_preset_green(self):
         """应用绿色预设 #00FF00"""
@@ -843,7 +861,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
-        print("� [颜色预设] 应用绿色 #00FF00")
+        
+        # 保存颜色到配置文件
+        current_tool = self.get_current_tool()
+        if current_tool and hasattr(self, 'tool_settings') and current_tool in self.tool_settings:
+            color_value = self.pencolor.name()
+            self.tool_settings[current_tool]['color'] = color_value
+            self.settings.setValue(f'tools/{current_tool}/color', color_value)
+            print(f"🎨 [颜色预设] 应用绿色 #00FF00 并保存到 {current_tool}")
+        else:
+            print("🎨 [颜色预设] 应用绿色 #00FF00")
 
     def apply_preset_settings(self, size, alpha):
         """应用预设的尺寸和透明度设置"""

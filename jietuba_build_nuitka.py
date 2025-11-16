@@ -130,6 +130,10 @@ def build_executable():
         '--include-module=pywintypes',
         '--include-module=pythoncom',
         
+        # 🔥 Rust 模块（长截图加速）
+        '--include-package=jietuba_rust',
+        '--include-package-data=jietuba_rust',
+        
         # 包含项目模块
         '--include-module=jietuba_build',
         '--include-module=jietuba_drawing',

@@ -15,6 +15,7 @@ from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPen, QColor, QCursor, QFont
 from PyQt5.QtWidgets import QApplication, QPushButton
 
 from jietuba_ui_components import _enumerate_monitor_dpi
+from jietuba_public import resource_path
 
 
 class ToolbarManager:
@@ -25,24 +26,25 @@ class ToolbarManager:
         self.setToolTip("左クリックで選択、右クリックで戻る")
 
         # 使用左右分布布局：左侧吸附其他按钮，右侧吸附钉图和确定按钮
-        btn_width = 35
-        btn_height = 35
+        btn_width = 45  # 调整按钮宽度（原35）
+        btn_height = 45  # 调整按钮高度（原35）
         
         # 左侧按钮从0开始布局
         left_btn_x = 0
         
         # 长截图按钮放在最左边
-        self.long_screenshot_btn.setGeometry(left_btn_x, 0, 40, btn_height)
-        left_btn_x += 40
+        self.long_screenshot_btn.setGeometry(left_btn_x, 0, 50, btn_height)  # 调整宽度（原40）
+        left_btn_x += 50
         
         # 保存按钮在长截图按钮右边
-        self.save_botton.setGeometry(left_btn_x, 0, 40, btn_height)
+        self.save_botton.setGeometry(left_btn_x, 0, 50, btn_height)  # 调整宽度（原40）
         self.save_botton.setToolTip('ファイルに保存')
-        left_btn_x += 40
+        left_btn_x += 50
         
         # 复制按钮直接跟在保存按钮后面
-        self.copy_botton.setGeometry(left_btn_x, 0, 40, btn_height)
-        self.copy_botton.setIcon(QIcon(":/copy.png"))
+        self.copy_botton.setGeometry(left_btn_x, 0, 50, btn_height)  # 调整宽度（原40）
+        self.copy_botton.setIcon(QIcon(resource_path("svg/copy.svg")))  # 使用专门的复制SVG图标
+        self.copy_botton.setIconSize(QSize(36, 36))  # 设置图标大小
         self.copy_botton.setToolTip('画像をコピー')
         self.copy_botton.clicked.connect(self.copy_pinned_image)
         self.copy_botton.hide()  # 默认隐藏,只在钉图模式下显示
@@ -84,88 +86,146 @@ class ToolbarManager:
         left_btn_x += btn_width
 
         # 计算工具栏总宽度，为右侧按钮预留空间
-        right_buttons_width = 40 + 60  # 钉图按钮40px + 确定按钮60px
+        right_buttons_width = 50 + 70  # 钉图按钮50px + 确定按钮70px（原40+60）
         toolbar_total_width = left_btn_x + 20 + right_buttons_width  # 左侧按钮 + 间隔 + 右侧按钮
         
         # 右侧按钮从右往左布局
-        right_btn_x = toolbar_total_width - 60  # 确定按钮位置（从右边开始）
+        right_btn_x = toolbar_total_width - 70  # 确定按钮位置（从右边开始）
         
         # 确定按钮吸附最右边
-        self.sure_btn.setGeometry(right_btn_x, 0, 60, 35)
+        self.sure_btn.setGeometry(right_btn_x, 0, 70, btn_height)  # 调整大小（原60x35）
         self.sure_btn.clicked.connect(self.handle_sure_btn_click)
         
         # 钉图按钮在确定按钮左边
-        right_btn_x -= 40
-        self.freeze_img_botton.setGeometry(right_btn_x, 0, 40, 35)
+        right_btn_x -= 50
+        self.freeze_img_botton.setGeometry(right_btn_x, 0, 50, btn_height)  # 调整大小（原40x35）
 
         # 调整工具栏大小
         self.botton_box.resize(toolbar_total_width, btn_height)
+        # 设置工具栏基板样式：白色背景，黑色描边，按钮默认淡背景避免悬停突变
+        self.botton_box.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 2px solid #333333;
+                border-radius: 6px;
+                padding: 2px;
+            }
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.02);
+                border: none;
+                border-radius: 0px;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 0, 0, 0.08);
+                border-radius: 0px;
+            }
+            QPushButton:pressed {
+                background-color: rgba(0, 0, 0, 0.15);
+                border-radius: 0px;
+            }
+        """)
         self.botton_box.hide()
 
         # 初始化二级菜单的布局和控件
         self.init_paint_tools_menu()
 
-        # 设置钉图按钮的属性
-        self.freeze_img_botton.setIcon(QIcon(":/freeze.png"))
-        self.freeze_img_botton.setToolTip('画像を画面に固定')
+        # 设置钉图按钮的属性 - 使用SVG图标
+        self.freeze_img_botton.setIcon(QIcon(resource_path("svg/钉图.svg")))
+        self.freeze_img_botton.setIconSize(QSize(32, 32))  # 设置图标大小
+        self.freeze_img_botton.setToolTip('画面にピン留め')
         self.freeze_img_botton.clicked.connect(self.freeze_img)
         
-        # 设置长截图按钮的属性
-        self.long_screenshot_btn.setText("📜")  # 使用emoji图标
+        # 设置长截图按钮的属性 - 使用SVG图标
+        self.long_screenshot_btn.setIcon(QIcon(resource_path("svg/长截图.svg")))
+        self.long_screenshot_btn.setIconSize(QSize(36, 36))  # 设置图标大小
         self.long_screenshot_btn.setToolTip('長スクリーンショット（スクロール）')
         self.long_screenshot_btn.clicked.connect(self.start_long_screenshot_mode)
 
-        # 设置按钮工具提示和图标（这些按钮现在在底部导航栏中）
+        # 设置按钮工具提示和图标（这些按钮现在在底部导航栏中） - 使用SVG图标
         self.pen.setToolTip('ペンツール (Shiftキー押しながらで直線)')
-        self.pen.setIcon(QIcon(":/pen.png"))
+        self.pen.setIcon(QIcon(resource_path("svg/画笔.svg")))
+        self.pen.setIconSize(QSize(32, 32))  # 设置图标大小
         self.pen.clicked.connect(self.change_pen_fun)
 
         self.highlighter.setToolTip('蛍光ペン (Shiftキー押しながらで直線)')
-        self.highlighter.setIcon(self._build_highlighter_icon())
-        self.highlighter.setIconSize(QSize(24, 24))
+        self.highlighter.setIcon(QIcon(resource_path("svg/荧光笔.svg")))
+        self.highlighter.setIconSize(QSize(32, 32))  # 调整图标大小（原24x24）
         self.highlighter.clicked.connect(self.change_highlighter_fun)
 
         self.drawarrow.setToolTip('矢印を描画')
-        self.drawarrow.setIcon(QIcon(":/arrowicon.png"))
+        self.drawarrow.setIcon(QIcon(resource_path("svg/箭头.svg")))
+        self.drawarrow.setIconSize(QSize(32, 32))  # 设置图标大小
         self.drawarrow.clicked.connect(self.draw_arrow_fun)
         
         self.bs.setToolTip('矩形を描画')
-        self.bs.setIcon(QIcon(":/rect.png"))
+        self.bs.setIcon(QIcon(resource_path("svg/方框.svg")))
+        self.bs.setIconSize(QSize(32, 32))  # 设置图标大小
         self.bs.clicked.connect(self.change_bs_fun)
         
         self.drawcircle.setToolTip('円を描画')
-        self.drawcircle.setIcon(QIcon(":/circle.png"))
+        self.drawcircle.setIcon(QIcon(resource_path("svg/圆框.svg")))
+        self.drawcircle.setIconSize(QSize(32, 32))  # 设置图标大小
         self.drawcircle.clicked.connect(self.drawcircle_fun)
         
         self.drawtext.setToolTip('テキストを追加')
-        self.drawtext.setIcon(QIcon(":/texticon.png"))
+        self.drawtext.setIcon(QIcon(resource_path("svg/文字.svg")))
+        self.drawtext.setIconSize(QSize(32, 32))  # 设置图标大小
         self.drawtext.clicked.connect(self.drawtext_fun)
         
         self.choice_clor_btn.setToolTip('ペンの色を選択')
-        self.choice_clor_btn.setIcon(QIcon(":/yst.png"))
+        self.choice_clor_btn.setIcon(QIcon(resource_path("svg/颜色设置.svg")))
+        self.choice_clor_btn.setIconSize(QSize(32, 32))  # 设置图标大小
         self.choice_clor_btn.clicked.connect(self.get_color)
-        # 移除悬停颜色菜单功能，避免干扰
+        # 移除悬停颜色菜单功能
         # self.choice_clor_btn.hoversignal.connect(self.Color_hoveraction)
         
         self.lastbtn.setToolTip('元に戻す')
-        self.lastbtn.setIcon(QIcon(":/last.png"))
+        self.lastbtn.setIcon(QIcon(resource_path("svg/撤回.svg")))
+        self.lastbtn.setIconSize(QSize(32, 32))  # 设置图标大小
         self.lastbtn.clicked.connect(self.last_step)
         
         self.nextbtn.setToolTip('やり直す')
-        self.nextbtn.setIcon(QIcon(":/next.png"))
+        self.nextbtn.setIcon(QIcon(resource_path("svg/复原.svg")))
+        self.nextbtn.setIconSize(QSize(32, 32))  # 设置图标大小
         self.nextbtn.clicked.connect(self.next_step)
         
-        self.save_botton.setIcon(QIcon(":/saveicon.png"))
+        self.save_botton.setIcon(QIcon(resource_path("svg/下载.svg")))
+        self.save_botton.setIconSize(QSize(36, 36))  # 设置图标大小
         
     def init_paint_tools_menu(self):
         """初始化绘画工具二级菜单"""
         menu_width = 385  # 增加宽度以容纳大型emoji按钮
         menu_height = 60  # 缩小高度
         
-        # 设置二级菜单的大小和样式
+        # 设置二级菜单的大小和样式 - 白色背景
         self.paint_tools_menu.resize(menu_width, menu_height)
+        self.paint_tools_menu.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+            }
+            QPushButton {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #f0f0f0;
+                border: 1px solid #bbb;
+            }
+            QPushButton:pressed {
+                background-color: #e0e0e0;
+            }
+            QSlider {
+                background-color: transparent;
+            }
+            QLabel {
+                background-color: transparent;
+            }
+        """)
         
-        # 布局调节控件（更紧凑的布局）
+        # 布局调节控件
         # 画笔大小滑动条
         self.size_slider.setGeometry(5, 25, 80, 18)  # 缩小尺寸
         self.size_slider.setOrientation(Qt.Horizontal)
@@ -177,10 +237,10 @@ class ToolbarManager:
         
         self.sizetextlabel.setText("大小")
         self.sizetextlabel.setGeometry(5, 5, 30, 16)  # 缩小并重新定位
-        self.sizetextlabel.setStyleSheet('color: rgb(255,255,255); font-size: 12px;')
+        self.sizetextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色，在白色背景上可见
         
         self.size_slider_label.setGeometry(90, 25, 25, 18)  # 调整位置
-        self.size_slider_label.setStyleSheet('color: rgb(255,255,255); font-size: 12px;')
+        self.size_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
         self.size_slider_label.setText("5")
         
         # 透明度滑动条
@@ -194,10 +254,10 @@ class ToolbarManager:
         
         self.alphatextlabel.setText("透明度")
         self.alphatextlabel.setGeometry(130, 5, 50, 16)  # 缩小并重新定位
-        self.alphatextlabel.setStyleSheet('color: rgb(255,255,255); font-size: 12px;')
+        self.alphatextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
         
         self.alpha_slider_label.setGeometry(215, 25, 30, 18)  # 调整位置
-        self.alpha_slider_label.setStyleSheet('color: rgb(255,255,255); font-size: 12px;')
+        self.alpha_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
         self.alpha_slider_label.setText("255")
         
         # 设置3个颜色预设按钮 - 水平排列，红黄绿三色
@@ -506,8 +566,8 @@ class ToolbarManager:
         """重新布局钉图模式下的工具栏按钮 - 支持DPI缩放，移除取色器和箭头，保持左右分布"""
         # 根据当前显示器的DPI缩放调整按钮尺寸（调得更小一些）
         dpi_scale = self.get_current_dpi_scale()
-        btn_width = int(25 * dpi_scale)
-        btn_height = int(25 * dpi_scale)
+        btn_width = int(32 * dpi_scale)
+        btn_height = int(32 * dpi_scale)
 
         print(f"🔧 工具栏重新布局: DPI缩放={dpi_scale:.2f}, 按钮尺寸={btn_width}x{btn_height}")
 
@@ -532,9 +592,8 @@ class ToolbarManager:
         if self.nextbtn.isVisible():
             left_buttons.append((self.nextbtn, btn_width))
 
-        # 右侧按钮（需求：隐藏閉じる按钮，因此不加入 sure_btn）
         right_buttons = []
-        # 如果未来需要恢复，只需 self.sure_btn.show() 后此逻辑仍兼容
+
         if self.sure_btn.isVisible():  # 当前逻辑下不会进入
             right_buttons.append((self.sure_btn, int(50 * dpi_scale)))
 

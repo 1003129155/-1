@@ -47,16 +47,38 @@ WS_EX_TRANSPARENT = 0x00000020
 from ctypes import wintypes
 from datetime import datetime
 from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
-from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG
+from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG, QSettings
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
 from PIL import Image
 import io
+
+# 导入长截图拼接统一接口
+from jietuba_long_stitch_unified import configure as long_stitch_configure
+
+# 从配置文件读取长截图引擎设置
+def _load_long_stitch_engine():
+    """从配置文件加载长截图引擎设置"""
+    settings = QSettings('Fandes', 'jietuba')
+    engine = settings.value('screenshot/long_stitch_engine', 'auto', type=str)
+    print(f"📖 从配置加载长截图引擎: {engine}")
+    return engine
+
+# 配置拼接引擎（从配置文件读取）
+_engine = _load_long_stitch_engine()
+long_stitch_configure(
+    engine=_engine,         # 从配置读取（默认 auto）
+    direction=0,            # 垂直拼接
+    sample_rate=0.6,        # Rust 采样率（提高到 0.6 增加精度）
+    corner_threshold=30,    # 特征点阈值（降低到 30 检测更多特征）
+    min_size_delta=1,       # 索引重建阈值（设为1强制每张都更新索引）
+    try_rollback=True,      # 开启回滚（让第2张能回退到top_index查找）
+    verbose=True,           # 显示拼接日志
+)
 
 # Windows API 常量
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
-
 
 class ScrollCaptureWindow(QWidget):
     """滚动长截图窗口
@@ -613,29 +635,28 @@ class ScrollCaptureWindow(QWidget):
             # 添加到截图列表（仍保留列表，用于最后的备份）
             self.screenshots.append(pil_image)
             
-            # 🆕 实时拼接：每截一张图就与之前的结果拼接
-            if self.stitched_result is None:
-                # 第一张截图，直接作为初始结果
-                self.stitched_result = pil_image
-                print(f"✅ 初始化拼接结果 (尺寸: {pil_image.size[0]}x{pil_image.size[1]})")
-            else:
-                # 后续截图，与当前结果拼接
-                print(f"🔗 开始拼接第 {len(self.screenshots)} 张图片...")
-                try:
-                    from jietuba_long_stitch import stitch_images
-                    self.stitched_result = stitch_images(
-                        self.stitched_result,
-                        pil_image,
-                        ignore_right_pixels=20
-                    )
-                    if self.stitched_result:
-                        print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
-                    else:
-                        print("⚠️ 拼接失败，保持原结果")
-                except Exception as e:
-                    print(f"⚠️ 拼接出错: {e}，保持原结果")
-                    import traceback
-                    traceback.print_exc()
+            # 🆕 实时拼接：每截一张图就重新拼接所有截图
+            print(f"🔗 开始拼接（共 {len(self.screenshots)} 张）...")
+            try:
+                # 使用统一接口（自动选择 Rust 或 Python）
+                from jietuba_long_stitch_unified import stitch_images
+                # 传入所有截图列表（Rust 算法需要完整列表）
+                result = stitch_images(self.screenshots.copy())
+                if result:
+                    self.stitched_result = result
+                    print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                else:
+                    print("⚠️ 拼接失败，保持原结果")
+                    if self.stitched_result is None:
+                        # 如果是第一张且失败，至少保存这张图
+                        self.stitched_result = pil_image
+            except Exception as e:
+                print(f"⚠️ 拼接出错: {e}，保持原结果")
+                import traceback
+                traceback.print_exc()
+                if self.stitched_result is None:
+                    # 如果是第一张且失败，至少保存这张图
+                    self.stitched_result = pil_image
             
             # 记录滚动距离（第一张截图距离为0，后续为累积距离）
             if len(self.screenshots) == 1:

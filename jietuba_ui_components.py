@@ -7,7 +7,6 @@ jietuba_ui_components.py - UI组件模块
 - 智能窗口选择器(基于 Windows API)
 - 自动调整大小的文本编辑器
 
-从 jietuba_screenshot.py 拆分而来，降低单文件复杂度
 """
 import os
 import math

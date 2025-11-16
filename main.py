@@ -315,7 +315,7 @@ class SettingsDialog(QDialog):
     
     def _create_screenshot_group(self):
         """创建截图功能设置组"""
-        from PyQt5.QtWidgets import QGroupBox, QCheckBox
+        from PyQt5.QtWidgets import QGroupBox, QCheckBox, QComboBox, QLabel, QHBoxLayout
         
         group = QGroupBox("スクリーンショット機能")
         group.setStyleSheet("""
@@ -399,6 +399,59 @@ class SettingsDialog(QDialog):
         group_layout.addWidget(self.taskbar_button_checkbox)
         group_layout.addWidget(taskbar_description)
         
+        # 长截图拼接引擎选择
+        engine_label = QLabel("長いスクリーンショットの拼接エンジン:")
+        engine_label.setStyleSheet("color: #333; font-size: 10pt; font-weight: bold; margin-top: 10px;")
+        group_layout.addWidget(engine_label)
+        
+        engine_layout = QHBoxLayout()
+        engine_layout.setSpacing(10)
+        
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem("自動選択 (推奨)", "auto")
+        self.engine_combo.addItem("Rust エンジン", "rust")
+        self.engine_combo.addItem("Python エンジン", "python")
+        
+        # 设置当前选中的引擎
+        current_engine = self.config_manager.get_long_stitch_engine()
+        for i in range(self.engine_combo.count()):
+            if self.engine_combo.itemData(i) == current_engine:
+                self.engine_combo.setCurrentIndex(i)
+                break
+        
+        self.engine_combo.setStyleSheet("""
+            QComboBox {
+                padding: 8px;
+                font-size: 10pt;
+                border: 2px solid #ddd;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QComboBox:focus {
+                border-color: #4CAF50;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #666;
+                margin-right: 10px;
+            }
+        """)
+        engine_layout.addWidget(self.engine_combo)
+        engine_layout.addStretch()
+        group_layout.addLayout(engine_layout)
+        
+        engine_description = QLabel(
+            " "
+        )
+        engine_description.setStyleSheet("color: #666; font-size: 9pt; margin-left: 25px;")
+        group_layout.addWidget(engine_description)
+        
         return group
 
     def get_hotkey(self):
@@ -415,7 +468,32 @@ class SettingsDialog(QDialog):
         self.config_manager.set_taskbar_button(self.taskbar_button_checkbox.isChecked())
         print(f"💾 任务栏按钮设置已保存: {self.taskbar_button_checkbox.isChecked()}")
         
+        # 保存长截图引擎设置
+        selected_engine = self.engine_combo.currentData()
+        self.config_manager.set_long_stitch_engine(selected_engine)
+        print(f"💾 长截图拼接引擎已保存: {selected_engine}")
+        
+        # 动态更新长截图配置
+        self._apply_long_stitch_config(selected_engine)
+        
         super().accept()
+    
+    def _apply_long_stitch_config(self, engine):
+        """动态应用长截图引擎配置"""
+        try:
+            from jietuba_long_stitch_unified import configure as long_stitch_configure
+            long_stitch_configure(
+                engine=engine,
+                direction=0,
+                sample_rate=0.6,
+                corner_threshold=30,
+                min_size_delta=1,
+                try_rollback=True,
+                verbose=True,
+            )
+            print(f"✅ 长截图引擎已切换到: {engine}")
+        except Exception as e:
+            print(f"⚠️  更新长截图配置失败: {e}")
 
     def keyPressEvent(self, event):
         """处理键盘事件，回车确认"""
@@ -635,6 +713,14 @@ class ConfigManager:
     def set_taskbar_button(self, enabled):
         """设置任务栏按钮开关状态"""
         self.settings.setValue('ui/taskbar_button', enabled)
+    
+    def get_long_stitch_engine(self):
+        """获取长截图拼接引擎设置"""
+        return self.settings.value('screenshot/long_stitch_engine', 'auto', type=str)
+    
+    def set_long_stitch_engine(self, engine):
+        """设置长截图拼接引擎"""
+        self.settings.setValue('screenshot/long_stitch_engine', engine)
     
     # 绘画工具配置管理
     def get_tool_settings(self):
@@ -928,7 +1014,7 @@ class MainWindow(QMainWindow):
             # 获取DPI缩放比例
             dpi_ratio = self._get_current_screen_dpi_ratio(primary_screen)
             
-            # 基础尺寸（在100% DPI下的理想大小）- 调整为更小的尺寸
+            # 基础尺寸（在100% DPI下的理想大小）
             base_width = 180
             base_height = 100
             base_min_width = 260
@@ -1100,7 +1186,7 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.minimize_btn)
         parent_layout.addLayout(control_layout)
         
-        # 退出按钮单独一行
+        # 退出按钮
         self.exit_btn = QPushButton("アプリを終了")
         self.exit_btn.setObjectName("dangerButton")
         self.exit_btn.clicked.connect(self.quit_application)
@@ -1334,7 +1420,7 @@ class MainWindow(QMainWindow):
                 f"ホットキー設定中にエラーが発生しました:\n{str(e)}"
             )
 
-    # 语言设置已整合至热键对话框
+
 
     def hide_to_tray(self):
         """最小化到托盘"""

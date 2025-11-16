@@ -77,6 +77,30 @@ def setup_venv():
             print("✅ 依赖包安装完成")
         else:
             print("✅ 所有依赖包已安装")
+        
+        # 🔥 检查并安装 jietuba_rust 模块（从 wheel 文件）
+        print("🔍 检查 Rust 模块...")
+        wheel_dir = os.path.join(current_dir, 'rs', 'target', 'wheels')
+        if os.path.exists(wheel_dir):
+            wheel_files = [f for f in os.listdir(wheel_dir) if f.endswith('.whl')]
+            if wheel_files:
+                wheel_path = os.path.join(wheel_dir, wheel_files[0])
+                print(f"📦 安装 Rust 模块: {wheel_files[0]}")
+                try:
+                    subprocess.run(
+                        [venv_pip, 'install', wheel_path, '--force-reinstall'],
+                        check=True
+                    )
+                    print("✅ Rust 模块安装完成")
+                except subprocess.CalledProcessError as e:
+                    print(f"⚠️  Rust 模块安装失败: {e}")
+                    print("   打包后将只支持 Python 引擎")
+            else:
+                print("⚠️  未找到 Rust wheel 文件，请先运行: compile_and_install.bat")
+                print("   打包后将只支持 Python 引擎")
+        else:
+            print("⚠️  未找到 rs/target/wheels 目录")
+            print("   打包后将只支持 Python 引擎")
     except subprocess.CalledProcessError as e:
         print(f"❌ 检查或安装依赖失败: {e}")
         return False
@@ -104,6 +128,9 @@ def build_executable():
     # 获取当前目录
     current_dir = os.path.dirname(os.path.abspath(__file__))
     
+    # SVG 目录的绝对路径
+    svg_dir = os.path.join(current_dir, 'svg')
+    
     # PyInstaller 参数
     args = [
         'main.py',                          # 主程序入口
@@ -111,6 +138,9 @@ def build_executable():
         '--onefile',                        # 打包成单个文件
         '--windowed',                       # Windows下隐藏控制台
         # '--icon=icon.ico',                # 图标文件(如果有) - 暂时注释掉
+        
+        # 添加数据文件 - SVG图标（使用绝对路径）
+        f'--add-data={svg_dir};svg',        # 包含svg目录及其所有文件
         
         # 核心依赖
         '--hidden-import=PyQt5.QtCore',
@@ -132,6 +162,10 @@ def build_executable():
         '--hidden-import=win32ui',
         '--hidden-import=pywintypes',
         '--hidden-import=pythoncom',
+        
+        # 🔥 Rust 模块（长截图加速）
+        '--hidden-import=jietuba_rust',
+        '--collect-all=jietuba_rust',
         
         # 🔥 pywin32 需要收集所有子模块和DLL
         '--collect-all=pywin32',

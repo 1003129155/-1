@@ -38,10 +38,29 @@ import time
 from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QTimer, QSettings
 from PyQt5.QtGui import QColor, QBrush, QPixmap, QPainter, QPen, QFont
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget
-# from fake_useragent import UserAgent  # UA生成器已移除，减小打包体积
 
-# from jietuba_speak import Speaker  # 语音功能已移除，减小打包体积
-# OCR模块已移除 - 如需文字识别功能请手动添加
+
+def resource_path(relative_path):
+    """
+    获取资源文件的绝对路径
+    适用于开发环境和 PyInstaller 打包后的环境
+    
+    Args:
+        relative_path: 资源文件的相对路径，如 "svg/画笔.svg"
+    
+    Returns:
+        资源文件的绝对路径
+    """
+    try:
+        # PyInstaller 打包后会创建临时文件夹，并将路径存储在 _MEIPASS 中
+        base_path = sys._MEIPASS
+    except AttributeError:
+        # 开发环境中，使用当前文件所在目录的父目录
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    return os.path.join(base_path, relative_path)
+
+
 OcrDetector = None
 OCR_AVAILABLE = False
 
@@ -52,7 +71,7 @@ print("platform is", sys.platform)
 PLATFORM_SYS = sys.platform
 CONFIG_DICT = {
     "last_pic_save_name": "{}".format(str(time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime()))),
-    "ocr_lang": "jp",  # 默认改为日语，可为 'ch'|'en'|'jp'
+    # "ocr_lang": "jp",  # [已废弃] 功能已移除，此配置项不再使用
 }
 
 def get_apppath():
