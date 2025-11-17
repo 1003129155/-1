@@ -206,6 +206,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             print("init slabel ui")
             # self.init_slabel_thread = Commen_Thread(self.init_slabel_ui)
             # self.init_slabel_thread.start()
+        self._update_choice_color_button()
         if mode != "screenshot":#非截屏模式(jietuba中也会调用截屏工具进行选取录屏或者文字识别)
             self.save_botton.hide()
             self.freeze_img_botton.hide()
@@ -529,7 +530,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # self.alpha_slider.setValue(self.pencolor.alpha())  # 注释掉这行
 
         self.text_box.setTextColor(self.pencolor)
-        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        self._update_choice_color_button()
         
         # 保存当前工具的颜色设置到配置文件
         current_tool = self.get_current_tool()
@@ -537,6 +538,52 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             color_value = self.pencolor.name()  # 获取颜色的十六进制字符串
             self.settings.setValue(f'tools/{current_tool}/color', color_value)
             print(f"💾 [配置保存] 工具 {current_tool} 颜色设置已保存: {color_value}")
+
+    def _update_choice_color_button(self):
+        """在不破坏原有样式的前提下，用彩色图标提示当前颜色。"""
+        if not hasattr(self, 'choice_clor_btn'):
+            return
+
+        try:
+            if not hasattr(self, '_choice_color_base_icon'):
+                base_icon = self.choice_clor_btn.icon()
+                if base_icon is None or base_icon.isNull():
+                    base_icon = QIcon()
+                self._choice_color_base_icon = QIcon(base_icon)
+
+            icon_size = self.choice_clor_btn.iconSize()
+            if not icon_size.isValid() or icon_size.isNull():
+                icon_size = QSize(32, 32)
+
+            if self._choice_color_base_icon.isNull():
+                pixmap = QPixmap(icon_size)
+                pixmap.fill(Qt.transparent)
+            else:
+                pixmap = self._choice_color_base_icon.pixmap(icon_size)
+
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            color = QColor(self.pencolor)
+
+            indicator_d = max(10, int(min(icon_size.width(), icon_size.height()) * 0.4))
+            indicator_rect = QRect(
+                icon_size.width() - indicator_d - 2,
+                icon_size.height() - indicator_d - 2,
+                indicator_d,
+                indicator_d,
+            )
+
+            painter.setPen(QPen(Qt.white, 1.5))
+            painter.setBrush(color)
+            painter.drawEllipse(indicator_rect)
+
+            painter.setPen(QPen(Qt.black, 0.5))
+            painter.drawEllipse(indicator_rect.adjusted(0, 0, -1, -1))
+            painter.end()
+
+            self.choice_clor_btn.setIcon(QIcon(pixmap))
+        except Exception as color_btn_error:
+            print(f"⚠️ 更新颜色按钮图标失败: {color_btn_error}")
 
     def change_smartcursor(self):
         if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
@@ -776,7 +823,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.pencolor.setAlpha(self.alpha)
                 # 更新颜色按钮显示
                 if hasattr(self, 'choice_clor_btn'):
-                    self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+                    self._update_choice_color_button()
                 print(f"🟡 [荧光笔] 强制应用黄色: {highlight_color}")
             
             self.setCursor(QCursor(QPixmap(":/pen.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
@@ -822,7 +869,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     def apply_color_preset_red(self):
         """应用红色预设 #FF0000"""
         self.pencolor = QColor(255, 0, 0, self.alpha)
-        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        self._update_choice_color_button()
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
@@ -840,7 +887,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     def apply_color_preset_yellow(self):
         """应用黄色预设 #FFFF00"""
         self.pencolor = QColor(255, 255, 0, self.alpha)
-        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        self._update_choice_color_button()
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
@@ -858,7 +905,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     def apply_color_preset_green(self):
         """应用绿色预设 #00FF00"""
         self.pencolor = QColor(0, 255, 0, self.alpha)
-        self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+        self._update_choice_color_button()
         # 更新文本框颜色（如果文本工具激活）
         if hasattr(self, 'text_box') and self.painter_tools.get('drawtext_on'):
             self.text_box.setTextColor(self.pencolor)
@@ -962,7 +1009,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.pencolor.setAlpha(self.alpha)
                 # 更新颜色按钮显示
                 if hasattr(self, 'choice_clor_btn'):
-                    self.choice_clor_btn.setStyleSheet('background-color:{0};'.format(self.pencolor.name()))
+                    self._update_choice_color_button()
                 # 更新文本框颜色
                 if hasattr(self, 'text_box'):
                     self.text_box.setTextColor(self.pencolor)
