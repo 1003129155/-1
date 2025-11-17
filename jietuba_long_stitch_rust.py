@@ -177,18 +177,31 @@ def stitch_pil_images(
         )
 
         # 添加所有图片
+        has_failure = False  # 🆕 标记是否有图片失败
         for i, img in enumerate(images):
             if verbose:
                 print(f"\n处理第 {i+1}/{len(images)} 张图片: {img.size}")
 
             # 向下滚动：所有图片都用 direction=1 (Bottom)
-            # 第1张：添加到bottom，建立top_index
-            # 第2张：在bottom_index中查找失败 → 回滚到top_index查找成功 → 添加到bottom
-            stitcher.add_image(img, direction=1)
+            # 第1张:添加到bottom,建立top_index
+            # 第2张:在bottom_index中查找失败 → 回滚到top_index查找成功 → 添加到bottom
+            overlap = stitcher.add_image(img, direction=1)
+            
+            # 🆕 检测添加是否失败（除第一张外）
+            if i > 0 and overlap is None:
+                has_failure = True
+                if verbose:
+                    print(f"  ⚠️  第 {i+1} 张图片添加失败，标记为需要切换引擎")
 
             top_count, bottom_count = stitcher.get_image_count()
             if verbose:
                 print(f"  当前队列: top={top_count}, bottom={bottom_count}")
+
+        # 🆕 如果有图片失败，直接返回 None 触发引擎切换
+        if has_failure:
+            if verbose:
+                print("\n❌ 拼接过程中有图片失败，返回 None 以触发引擎切换")
+            return None
 
         # 导出结果
         if verbose:
