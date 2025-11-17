@@ -230,18 +230,44 @@ class Finder:
         self.screen_offset_x = 0
         self.screen_offset_y = 0
 
+    def _refresh_screen_offsets(self):
+        """根据截图窗口的虚拟桌面信息更新偏移量，确保多屏坐标正确"""
+        offset_x = 0
+        offset_y = 0
+
+        try:
+            slabel = self.parent
+            if slabel is not None:
+                # 优先使用虚拟桌面偏移（多屏截图时由 Slabel 维护）
+                if hasattr(slabel, 'virtual_desktop_offset_x'):
+                    offset_x = int(getattr(slabel, 'virtual_desktop_offset_x', 0))
+                elif hasattr(slabel, 'virtual_desktop_min_x'):
+                    offset_x = int(getattr(slabel, 'virtual_desktop_min_x', 0))
+
+                if hasattr(slabel, 'virtual_desktop_offset_y'):
+                    offset_y = int(getattr(slabel, 'virtual_desktop_offset_y', 0))
+                elif hasattr(slabel, 'virtual_desktop_min_y'):
+                    offset_y = int(getattr(slabel, 'virtual_desktop_min_y', 0))
+
+                # 兼容旧逻辑：若仍为0且主窗口记录了当前屏几何，作为兜底
+                if offset_x == 0 and offset_y == 0 and hasattr(slabel, 'parent'):
+                    main_window = slabel.parent
+                    if hasattr(main_window, 'screen_geometry'):
+                        screen_geo = main_window.screen_geometry
+                        offset_x = int(screen_geo.x())
+                        offset_y = int(screen_geo.y())
+        except Exception as e:
+            _debug_print(f"Finder 偏移刷新失败: {e}")
+
+        self.screen_offset_x = offset_x
+        self.screen_offset_y = offset_y
+        if DEBUG_MONITOR:
+            print(f"🧭 [智能选区] 使用偏移: ({self.screen_offset_x}, {self.screen_offset_y})")
+
     def find_contours_setup(self):
         """枚举所有可见窗口"""
         self.windows = []
-        
-        # 获取屏幕偏移（多屏幕支持）
-        try:
-            screen_geo = self.parent.parent.screen_geometry
-            self.screen_offset_x = screen_geo.x()
-            self.screen_offset_y = screen_geo.y()
-        except Exception:
-            self.screen_offset_x = 0
-            self.screen_offset_y = 0
+        self._refresh_screen_offsets()
         
         def enum_windows_callback(hwnd, _):
             """枚举窗口回调函数"""
