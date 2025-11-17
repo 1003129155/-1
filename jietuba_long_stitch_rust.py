@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-长截图拼接脚本 - Rust 加速版本
+长截图拼接脚本 - Rust版本
 使用 Rust 实现的特征点匹配算法进行高性能图片拼接
 """
 
@@ -23,6 +23,8 @@ class RustLongStitch:
         descriptor_patch_size: int = 9,
         min_size_delta: int = 64,
         try_rollback: bool = True,
+        distance_threshold: float = 0.1,
+        ef_search: int = 32,
     ):
         """
         初始化长截图拼接器
@@ -36,6 +38,8 @@ class RustLongStitch:
             descriptor_patch_size: 特征描述符块大小
             min_size_delta: 最小变化量阈值
             try_rollback: 是否尝试回滚匹配
+            distance_threshold: 特征匹配距离阈值 (越低越严格，推荐0.05-0.3)
+            ef_search: HNSW搜索参数 (越高准确率越高但速度越慢，推荐16-128)
         """
         try:
             import jietuba_rust
@@ -59,16 +63,27 @@ class RustLongStitch:
             descriptor_patch_size,
             min_size_delta,
             try_rollback,
+            distance_threshold,
+            ef_search,
         )
         self.direction = direction
+        
+        # 保存参数用于调试
+        self._corner_threshold = corner_threshold
+        self._sample_rate = sample_rate
+        self._min_size_delta = min_size_delta
+        self._try_rollback = try_rollback
+        self._distance_threshold = distance_threshold
+        self._ef_search = ef_search
 
-    def add_image(self, image: Image.Image, direction: int = 1) -> Optional[int]:
+    def add_image(self, image: Image.Image, direction: int = 1, debug: bool = True) -> Optional[int]:
         """
         添加一张图片到拼接队列
 
         参数:
             image: PIL Image 对象
             direction: 0=上/左图片列表, 1=下/右图片列表
+            debug: 是否打印调试信息
 
         返回:
             重叠尺寸 (像素)，如果未找到重叠则返回 None
@@ -78,21 +93,55 @@ class RustLongStitch:
         image.save(buffer, format="PNG")
         image_bytes = buffer.getvalue()
 
+        if debug:
+            # 获取添加前的状态
+            top_count_before, bottom_count_before = self.get_image_count()
+            direction_name = "Top/Left" if direction == 0 else "Bottom/Right"
+            print(f"\n🔍 [Rust调试] 添加图片到 {direction_name} 列表")
+            print(f"   图片尺寸: {image.size}")
+            print(f"   字节大小: {len(image_bytes):,} bytes")
+            print(f"   添加前状态: top={top_count_before}, bottom={bottom_count_before}")
+
         # 调用 Rust 接口
         overlap_size, is_rollback, result_direction = self.service.add_image(
             image_bytes, direction
         )
 
-        if is_rollback:
-            print("  ⚠️  检测到回滚（图片可能重复或顺序错误）")
-
-        if overlap_size is not None:
-            print(f"  ✅ 找到重叠区域: {overlap_size} 像素")
-            # 显示索引状态（调试用）
-            top_count, bottom_count = self.get_image_count()
-            print(f"     索引状态: top_list={top_count}张, bottom_list={bottom_count}张")
-        else:
-            print("  ❌ 未找到重叠区域")
+        if debug:
+            # 获取添加后的状态
+            top_count_after, bottom_count_after = self.get_image_count()
+            result_dir_name = "Top/Left" if result_direction == 0 else "Bottom/Right"
+            
+            print(f"   添加后状态: top={top_count_after}, bottom={bottom_count_after}")
+            print(f"   实际添加到: {result_dir_name} 列表")
+            
+            # 详细分析
+            if is_rollback:
+                print("   ⚠️  发生回滚:")
+                print(f"      - 在 {direction_name} 列表中未找到匹配")
+                print(f"      - 回滚到另一个列表查找")
+                if overlap_size is not None:
+                    print(f"      - 回滚后找到重叠: {overlap_size} 像素")
+                else:
+                    print(f"      - 回滚后仍未找到匹配")
+            
+            if overlap_size is not None:
+                overlap_percent = (overlap_size / image.size[1 if self.direction == 0 else 0]) * 100
+                print(f"   ✅ 找到重叠区域:")
+                print(f"      - 重叠尺寸: {overlap_size} 像素")
+                print(f"      - 重叠比例: {overlap_percent:.1f}%")
+                print(f"      - 特征点匹配成功")
+            else:
+                print(f"   ❌ 未找到重叠区域:")
+                print(f"      可能原因:")
+                print(f"      1. 特征点不足（图片太简单/纯色）")
+                print(f"         → 降低 corner_threshold (当前={self._corner_threshold})")
+                print(f"         → 推荐值: {max(5, self._corner_threshold - 10)}")
+                print(f"      2. 图片被缩得太小（细节丢失）")
+                print(f"         → 提高 sample_rate (当前={self._sample_rate})")
+                print(f"         → 推荐值: {min(1.0, self._sample_rate + 0.2):.1f}")
+                print(f"      3. 图片内容差异过大（不连续）")
+                print(f"         → 检查截图顺序和完整性")
 
         return overlap_size
 
@@ -128,10 +177,15 @@ class RustLongStitch:
 def stitch_pil_images(
     images: List[Image.Image],
     direction: int = 0,
-    sample_rate: float = 0.5,
+    sample_rate: float = 0.6,
+    min_sample_size: int = 300,
+    max_sample_size: int = 800,
     corner_threshold: int = 30,
+    descriptor_patch_size: int = 9,
     min_size_delta: int = 1,
-    try_rollback: bool = False,
+    try_rollback: bool = True,
+    distance_threshold: float = 0.1,
+    ef_search: int = 32,
     verbose: bool = True,
 ) -> Optional[Image.Image]:
     """
@@ -140,10 +194,15 @@ def stitch_pil_images(
     参数:
         images: PIL Image对象列表
         direction: 滚动方向 (0=垂直, 1=水平)
-        sample_rate: 采样率，控制特征提取的图片缩放比例
-        corner_threshold: 特征点阈值（越低检测越多特征点）
+        sample_rate: 采样率，控制特征提取的图片缩放比例 (0.0-1.0)
+        min_sample_size: 最小采样尺寸 (像素)
+        max_sample_size: 最大采样尺寸 (像素)
+        corner_threshold: 特征点阈值（越低检测越多特征点，推荐10-64）
+        descriptor_patch_size: 特征描述符块大小 (像素)
         min_size_delta: 索引重建阈值（像素），设为1强制每张都更新
         try_rollback: 是否尝试回滚匹配
+        distance_threshold: 特征匹配距离阈值 (0.05-0.3，越低越严格)
+        ef_search: HNSW搜索参数 (16-128，越高准确率越高但速度越慢)
         verbose: 是否输出详细信息
 
     返回:
@@ -160,62 +219,126 @@ def stitch_pil_images(
         return images[0]
 
     if verbose:
-        print(f"开始使用 Rust 算法拼接 {len(images)} 张图片...")
-        print(f"方向: {'垂直' if direction == 0 else '水平'}")
-        print(f"参数: sample_rate={sample_rate}, corner_threshold={corner_threshold}, min_size_delta={min_size_delta}, try_rollback={try_rollback}")
+        print(f"\n{'='*60}")
+        print(f"🦀 Rust 长截图拼接引擎")
+        print(f"{'='*60}")
+        print(f"开始拼接 {len(images)} 张图片")
+        print(f"\n📋 参数配置:")
+        print(f"   滚动方向: {'垂直 ↕️' if direction == 0 else '水平 ↔️'}")
+        print(f"   采样率: {sample_rate} (图片缩放比例)")
+        print(f"   采样尺寸范围: {min_sample_size} - {max_sample_size} 像素")
+        print(f"   特征点阈值: {corner_threshold} (越低=越多特征点)")
+        print(f"   描述符块大小: {descriptor_patch_size} 像素")
+        print(f"   索引重建阈值: {min_size_delta} 像素")
+        print(f"   回滚匹配: {'启用' if try_rollback else '禁用'}")
+        print(f"   距离阈值: {distance_threshold} (越低=越严格)")
+        print(f"   HNSW搜索参数: {ef_search} (越高=越准确)")
+        print(f"{'='*60}")
 
     try:
         # 创建拼接器
         stitcher = RustLongStitch(
             direction=direction,
             sample_rate=sample_rate,
-            min_sample_size=300,
-            max_sample_size=800,
+            min_sample_size=min_sample_size,
+            max_sample_size=max_sample_size,
             corner_threshold=corner_threshold,
+            descriptor_patch_size=descriptor_patch_size,
             min_size_delta=min_size_delta,
             try_rollback=try_rollback,
+            distance_threshold=distance_threshold,
+            ef_search=ef_search,
         )
 
         # 添加所有图片
         has_failure = False  # 🆕 标记是否有图片失败
+        success_count = 0
+        fail_count = 0
+        
         for i, img in enumerate(images):
             if verbose:
-                print(f"\n处理第 {i+1}/{len(images)} 张图片: {img.size}")
+                print(f"\n{'='*60}")
+                print(f"处理第 {i+1}/{len(images)} 张图片: {img.size}")
+                print(f"{'='*60}")
 
             # 向下滚动：所有图片都用 direction=1 (Bottom)
             # 第1张:添加到bottom,建立top_index
             # 第2张:在bottom_index中查找失败 → 回滚到top_index查找成功 → 添加到bottom
-            overlap = stitcher.add_image(img, direction=1)
+            overlap = stitcher.add_image(img, direction=1, debug=verbose)
             
             # 🆕 检测添加是否失败（除第一张外）
             if i > 0 and overlap is None:
                 has_failure = True
+                fail_count += 1
                 if verbose:
-                    print(f"  ⚠️  第 {i+1} 张图片添加失败，标记为需要切换引擎")
+                    print(f"\n❌ 第 {i+1} 张图片添加失败!")
+                    print(f"   累计成功: {success_count}/{i}")
+                    print(f"   累计失败: {fail_count}")
+            elif i > 0:
+                success_count += 1
 
             top_count, bottom_count = stitcher.get_image_count()
             if verbose:
-                print(f"  当前队列: top={top_count}, bottom={bottom_count}")
+                print(f"\n📊 当前状态汇总:")
+                print(f"   队列: top={top_count}, bottom={bottom_count}")
+                print(f"   成功率: {success_count}/{max(1, i)} = {success_count/max(1, i)*100:.1f}%")
 
         # 🆕 如果有图片失败，直接返回 None 触发引擎切换
         if has_failure:
             if verbose:
-                print("\n❌ 拼接过程中有图片失败，返回 None 以触发引擎切换")
+                print(f"\n{'='*60}")
+                print(f"❌ 拼接失败总结")
+                print(f"{'='*60}")
+                print(f"总图片数: {len(images)}")
+                print(f"成功: {success_count}")
+                print(f"失败: {fail_count}")
+                print(f"成功率: {success_count/(len(images)-1)*100:.1f}%")
+                print(f"\n💡 失败原因分析与解决方案:")
+                print(f"")
+                print(f"1. 特征点不足 ← 最常见原因")
+                print(f"   问题: 图片中可识别的角点/拐点太少")
+                print(f"   当前值: corner_threshold = {corner_threshold}")
+                print(f"   解决: 降低阈值以检测更多特征点")
+                print(f"   建议: corner_threshold = {max(5, corner_threshold - 10)} 到 {max(10, corner_threshold - 20)}")
+                print(f"   说明: 阈值越低 = 越宽松 = 检测更多不明显的角点")
+                print(f"")
+                print(f"2. 采样率过低")
+                print(f"   问题: 图片被缩得太小，细节丢失")
+                print(f"   当前值: sample_rate = {sample_rate} (处理尺寸为原图的 {sample_rate*100:.0f}%)")
+                print(f"   解决: 提高采样率以保留更多细节")
+                print(f"   建议: sample_rate = {min(1.0, sample_rate + 0.2):.1f}")
+                print(f"   说明: 采样率越高 = 图片越大 = 细节越清晰（但速度变慢）")
+                print(f"")
+                print(f"3. 图片差异过大")
+                print(f"   问题: 两张截图之间没有重叠区域")
+                print(f"   检查: 确认截图是连续的，中间没有跳过内容")
+                print(f"")
+                print(f"🔄 系统将自动切换到 Python 哈希引擎（基于像素哈希，更鲁棒）...")
+                print(f"{'='*60}")
             return None
 
         # 导出结果
         if verbose:
-            print("\n正在合成最终图片...")
+            print(f"\n{'='*60}")
+            print(f"🎨 正在合成最终图片...")
+            print(f"{'='*60}")
 
         result = stitcher.export()
 
         if result:
             if verbose:
-                print(f"拼接完成! 最终尺寸: {result.size}")
+                print(f"✅ 拼接完成!")
+                print(f"\n📊 最终统计:")
+                print(f"   输入图片: {len(images)} 张")
+                print(f"   成功拼接: {success_count} 处")
+                print(f"   最终尺寸: {result.size[0]} x {result.size[1]} 像素")
+                print(f"   成功率: {success_count/(len(images)-1)*100:.1f}%")
+                print(f"{'='*60}")
             return result
         else:
             if verbose:
-                print("拼接失败: 无法生成结果")
+                print(f"❌ 拼接失败: 无法生成结果")
+                print(f"   可能原因: Rust 引擎内部错误")
             return None
 
     except Exception as e:

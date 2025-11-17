@@ -29,13 +29,15 @@ class LongStitchConfig:
         self.ignore_right_pixels = 20  # 忽略右侧像素（滚动条）
         
         # Rust 版本参数
-        self.sample_rate = 0.5          # 采样率
-        self.min_sample_size = 300      # 最小采样尺寸
-        self.max_sample_size = 800      # 最大采样尺寸
-        self.corner_threshold = 64      # 特征点阈值
-        self.descriptor_patch_size = 9  # 描述符大小
-        self.min_size_delta = 1         # 最小变化量（降低到1，强制每张都更新索引）
-        self.try_rollback = False       # 是否尝试回滚（关闭以避免误判）
+        self.sample_rate = 0.6          # 采样率 (0.0-1.0，提高到0.6增加精度)
+        self.min_sample_size = 300      # 最小采样尺寸 (像素)
+        self.max_sample_size = 800      # 最大采样尺寸 (像素)
+        self.corner_threshold = 30      # 特征点阈值 (越低检测越多特征点)
+        self.descriptor_patch_size = 9  # 描述符块大小 (像素)
+        self.min_size_delta = 1         # 索引重建阈值 (像素，设为1强制每张都更新)
+        self.try_rollback = True        # 是否尝试回滚匹配
+        self.distance_threshold = 0.1   # 特征匹配距离阈值 (0.05-0.3，越低越严格)
+        self.ef_search = 32             # HNSW搜索参数 (16-128，越高准确率越高但速度越慢)
 
 
 # 全局配置实例
@@ -66,10 +68,15 @@ def configure(
     # Python 版本参数
     ignore_right_pixels: int = 20,
     # Rust 版本参数
-    sample_rate: float = 0.5,
-    corner_threshold: int = 64,
+    sample_rate: float = 0.6,
+    min_sample_size: int = 300,
+    max_sample_size: int = 800,
+    corner_threshold: int = 30,
+    descriptor_patch_size: int = 9,
     min_size_delta: int = 1,
-    try_rollback: bool = False,
+    try_rollback: bool = True,
+    distance_threshold: float = 0.1,
+    ef_search: int = 32,
 ):
     """
     配置长截图拼接参数
@@ -83,10 +90,15 @@ def configure(
         ignore_right_pixels: 忽略右侧像素数
         
         # Rust 版本参数
-        sample_rate: 采样率 (0.0-1.0)
-        corner_threshold: 特征点阈值
-        min_size_delta: 索引重建阈值（像素）
-        try_rollback: 是否启用回滚检测
+        sample_rate: 采样率 (0.0-1.0，越高精度越高但速度越慢)
+        min_sample_size: 最小采样尺寸 (像素)
+        max_sample_size: 最大采样尺寸 (像素)
+        corner_threshold: 特征点阈值 (越低检测越多特征点，推荐10-64)
+        descriptor_patch_size: 描述符块大小 (像素，推荐9或11)
+        min_size_delta: 索引重建阈值 (像素，设为1强制每张都更新)
+        try_rollback: 是否启用回滚检测 (允许在另一个队列中查找)
+        distance_threshold: 特征匹配距离阈值 (0.05-0.3，越低越严格)
+        ef_search: HNSW搜索参数 (16-128，越高准确率越高但速度越慢)
     """
     config.engine = engine
     config.direction = direction
@@ -97,7 +109,14 @@ def configure(
     
     # Rust 参数
     config.sample_rate = sample_rate
+    config.min_sample_size = min_sample_size
+    config.max_sample_size = max_sample_size
     config.corner_threshold = corner_threshold
+    config.descriptor_patch_size = descriptor_patch_size
+    config.min_size_delta = min_size_delta
+    config.try_rollback = try_rollback
+    config.distance_threshold = distance_threshold
+    config.ef_search = ef_search
     config.min_size_delta = min_size_delta
     config.try_rollback = try_rollback
     
@@ -207,9 +226,14 @@ def _stitch_with_rust(images: List[Image.Image]) -> Optional[Image.Image]:
         images,
         direction=config.direction,
         sample_rate=config.sample_rate,
+        min_sample_size=config.min_sample_size,
+        max_sample_size=config.max_sample_size,
         corner_threshold=config.corner_threshold,
+        descriptor_patch_size=config.descriptor_patch_size,
         min_size_delta=config.min_size_delta,
         try_rollback=config.try_rollback,
+        distance_threshold=config.distance_threshold,
+        ef_search=config.ef_search,
         verbose=config.verbose,
     )
     

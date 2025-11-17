@@ -63,16 +63,51 @@ def _load_long_stitch_engine():
     print(f"📖 从配置加载长截图引擎: {engine}")
     return engine
 
+def _load_long_stitch_config():
+    """从配置文件加载所有长截图参数"""
+    settings = QSettings('Fandes', 'jietuba')
+    
+    config = {
+        'engine': settings.value('screenshot/long_stitch_engine', 'auto', type=str),
+        'sample_rate': settings.value('screenshot/rust_sample_rate', 0.6, type=float),
+        'min_sample_size': settings.value('screenshot/rust_min_sample_size', 300, type=int),
+        'max_sample_size': settings.value('screenshot/rust_max_sample_size', 800, type=int),
+        'corner_threshold': settings.value('screenshot/rust_corner_threshold', 30, type=int),
+        'descriptor_patch_size': settings.value('screenshot/rust_descriptor_patch_size', 9, type=int),
+        'min_size_delta': settings.value('screenshot/rust_min_size_delta', 1, type=int),
+        'try_rollback': settings.value('screenshot/rust_try_rollback', True, type=bool),
+        'distance_threshold': settings.value('screenshot/rust_distance_threshold', 0.1, type=float),
+        'ef_search': settings.value('screenshot/rust_ef_search', 32, type=int),
+    }
+    
+    print(f"📖 从配置加载长截图参数:")
+    print(f"   引擎: {config['engine']}")
+    print(f"   采样率: {config['sample_rate']}")
+    print(f"   采样尺寸: {config['min_sample_size']}-{config['max_sample_size']}")
+    print(f"   特征点阈值: {config['corner_threshold']}")
+    print(f"   描述符大小: {config['descriptor_patch_size']}")
+    print(f"   索引重建阈值: {config['min_size_delta']}")
+    print(f"   回滚匹配: {config['try_rollback']}")
+    print(f"   距离阈值: {config['distance_threshold']}")
+    print(f"   HNSW搜索参数: {config['ef_search']}")
+    
+    return config
+
 # 配置拼接引擎（从配置文件读取）
-_engine = _load_long_stitch_engine()
+_long_stitch_config = _load_long_stitch_config()
 long_stitch_configure(
-    engine=_engine,         # 从配置读取（默认 auto）
-    direction=0,            # 垂直拼接
-    sample_rate=0.6,        # Rust 采样率（提高到 0.6 增加精度）
-    corner_threshold=30,    # 特征点阈值（降低到 30 检测更多特征）
-    min_size_delta=1,       # 索引重建阈值（设为1强制每张都更新索引）
-    try_rollback=True,      # 开启回滚（让第2张能回退到top_index查找）
-    verbose=True,           # 显示拼接日志
+    engine=_long_stitch_config['engine'],
+    direction=0,  # 垂直拼接
+    sample_rate=_long_stitch_config['sample_rate'],
+    min_sample_size=_long_stitch_config['min_sample_size'],
+    max_sample_size=_long_stitch_config['max_sample_size'],
+    corner_threshold=_long_stitch_config['corner_threshold'],
+    descriptor_patch_size=_long_stitch_config['descriptor_patch_size'],
+    min_size_delta=_long_stitch_config['min_size_delta'],
+    try_rollback=_long_stitch_config['try_rollback'],
+    distance_threshold=_long_stitch_config['distance_threshold'],
+    ef_search=_long_stitch_config['ef_search'],
+    verbose=True,
 )
 
 # Windows API 常量
@@ -635,28 +670,55 @@ class ScrollCaptureWindow(QWidget):
             # 添加到截图列表（仍保留列表，用于最后的备份）
             self.screenshots.append(pil_image)
             
-            # 🆕 实时拼接：每截一张图就重新拼接所有截图
-            print(f"🔗 开始拼接（共 {len(self.screenshots)} 张）...")
+            # 🆕 智能拼接策略：根据引擎选择拼接方式
+            screenshot_count = len(self.screenshots)
+            
             try:
-                # 使用统一接口（自动选择 Rust 或 Python）
-                from jietuba_long_stitch_unified import stitch_images
-                # 传入所有截图列表（Rust 算法需要完整列表）
-                result = stitch_images(self.screenshots.copy())
-                if result:
-                    self.stitched_result = result
-                    print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                from jietuba_long_stitch_unified import stitch_images, config
+                
+                # 检测当前引擎类型
+                current_engine = config.engine
+                
+                # Rust 引擎：必须使用全量拼接（有状态服务）
+                # Python 引擎：使用增量拼接（更快）
+                if current_engine == "rust":
+                    # 🦀 Rust 引擎：传入所有截图（特征点需要完整上下文）
+                    print(f"🔗 全量拼接（共 {screenshot_count} 张）- Rust 引擎...")
+                    result = stitch_images(self.screenshots.copy())
+                    if result:
+                        self.stitched_result = result
+                        print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                    else:
+                        print("⚠️ Rust 拼接失败，保持原结果")
+                        if self.stitched_result is None:
+                            self.stitched_result = pil_image
+                
                 else:
-                    print("⚠️ 拼接失败，保持原结果")
+                    # 🐍 Python 引擎 或 Auto 模式：使用增量拼接
                     if self.stitched_result is None:
-                        # 如果是第一张且失败，至少保存这张图
+                        # 第一张图片
+                        print(f"🔗 初始化第 {screenshot_count} 张图片...")
                         self.stitched_result = pil_image
+                        print(f"✅ 第一张图片作为基础，尺寸: {pil_image.size[0]}x{pil_image.size[1]}")
+                    else:
+                        # 🚀 增量拼接：只拼接 [上次结果, 新截图]
+                        print(f"🔗 增量拼接第 {screenshot_count} 张图片...")
+                        result = stitch_images([self.stitched_result, pil_image])
+                        if result:
+                            self.stitched_result = result
+                            print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                        else:
+                            print("⚠️ 增量拼接失败，保持原结果")
+                        
             except Exception as e:
-                print(f"⚠️ 拼接出错: {e}，保持原结果")
+                print(f"⚠️ 拼接出错: {e}")
                 import traceback
                 traceback.print_exc()
+                
+                # 拼接失败时的回退处理
                 if self.stitched_result is None:
-                    # 如果是第一张且失败，至少保存这张图
                     self.stitched_result = pil_image
+                    print("⚠️ 使用当前截图作为初始结果")
             
             # 记录滚动距离（第一张截图距离为0，后续为累积距离）
             if len(self.screenshots) == 1:
