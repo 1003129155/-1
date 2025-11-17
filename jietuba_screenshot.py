@@ -243,7 +243,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.alpha = 255  # 透明度值
         # 修改：智能选区默认关闭，避免启动时卡顿
         self.smartcursor_on = self.settings.value("screenshot/smartcursor", False, type=bool)  # 默认改为False
-        self.finding_rect = True  # 正在自动寻找选取的控制变量,就进入截屏之后会根据鼠标移动到的位置自动选取,
+        # 只有在智能选区开启时才需要处于自动寻找状态，避免阻塞手动选区的移动/缩放
+        self.finding_rect = bool(self.smartcursor_on)
         self.drag_started = False  # 手动拖动是否已开始
         self.drag_threshold = 16  # 拖动阈值（像素）
         self.tool_width = 5
@@ -2527,6 +2528,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         is_smart_mode = self.finding_rect and self.smartcursor_on
         self.NpainterNmoveFlag = not is_smart_mode
+        if not is_smart_mode:
+            # 进入手动选区流程，确保后续能够自由调整选区
+            self.finding_rect = False
         
         if is_smart_mode:
             print("🖱️ [智能选区] 等待用户操作：松开=确认智能选区，拖动=切换手动")
@@ -2566,6 +2570,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             distance = abs(x - self.rx0) + abs(y - self.ry0)
             if distance > self.drag_threshold:
                 self.drag_started = True
+                # 一旦进入手动拖动，就彻底退出智能选区检测模式
+                self.finding_rect = False
                 self.x0 = self.rx0
                 self.y0 = self.ry0
                 print("🖱️ [手动选区] 开始拖动")
