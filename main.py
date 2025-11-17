@@ -1210,7 +1210,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.04 | 更新日: 2025.11/15")
+        self.version_label = QLabel("バージョン: 1.05 | 更新日: 2025.11/17")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
