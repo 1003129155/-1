@@ -256,9 +256,9 @@ class SettingsDialog(QDialog):
         group_layout.addWidget(engine_label)
         
         self.engine_combo = QComboBox()
-        self.engine_combo.addItem("🔄 自動選択 (推奨)", "auto")
+        self.engine_combo.addItem("🔄 自動選択", "auto")
         self.engine_combo.addItem("⚡ ピクセル特徴", "rust")
-        self.engine_combo.addItem("🐍 画像ハッシュ値", "rust/python")
+        self.engine_combo.addItem("🐍 画像ハッシュ値", "python")
         
         # 设置当前选中的引擎
         current_engine = self.config_manager.get_long_stitch_engine()
@@ -493,7 +493,7 @@ class SettingsDialog(QDialog):
         btn_layout.setSpacing(10)
         
         # 重置按钮（左侧）
-        reset_btn = QPushButton("🔄 設定をリセット")
+        reset_btn = QPushButton("🔄 リセット")
         reset_btn.clicked.connect(self._reset_all_settings)
         reset_btn.setFixedSize(150, 40)
         reset_btn.setStyleSheet("""
@@ -518,7 +518,7 @@ class SettingsDialog(QDialog):
         btn_layout.addStretch()
 
         # 取消按钮
-        cancel_btn = QPushButton("キャンセル")
+        cancel_btn = QPushButton("cancel")
         cancel_btn.clicked.connect(self.reject)
         cancel_btn.setFixedSize(120, 40)
         cancel_btn.setStyleSheet("""
@@ -582,7 +582,7 @@ class SettingsDialog(QDialog):
         
         if reply == QMessageBox.Yes:
             # 重置快捷键
-            self.hotkey_input.setText("ctrl+shift+a")
+            self.hotkey_input.setText("ctrl+1")
             
             # 重置任务栏按钮（默认关闭）
             self.taskbar_button_checkbox.setChecked(False)
@@ -594,10 +594,10 @@ class SettingsDialog(QDialog):
             self.engine_combo.setCurrentIndex(0)  # 自動選択
             
             # 重置 Rust 引擎参数
-            self.sample_rate_input.setValue(0.9)
+            self.sample_rate_input.setValue(1.0)
             self.min_sample_size_input.setValue(300)
             self.max_sample_size_input.setValue(800)
-            self.corner_threshold_input.setValue(30)
+            self.corner_threshold_input.setValue(5)
             self.descriptor_patch_size_input.setValue(9)
             self.min_size_delta_input.setValue(1)
             self.try_rollback_checkbox.setChecked(True)
