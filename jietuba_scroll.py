@@ -53,22 +53,36 @@ from PIL import Image
 import io
 
 # 导入长截图拼接统一接口
-from jietuba_long_stitch_unified import configure as long_stitch_configure
+from jietuba_long_stitch_unified import (
+    configure as long_stitch_configure,
+    normalize_engine_value,
+)
 
 # 从配置文件读取长截图引擎设置
 def _load_long_stitch_engine():
     """从配置文件加载长截图引擎设置"""
     settings = QSettings('Fandes', 'jietuba')
-    engine = settings.value('screenshot/long_stitch_engine', 'auto', type=str)
-    print(f"📖 从配置加载长截图引擎: {engine}")
+    raw_engine = settings.value('screenshot/long_stitch_engine', 'python', type=str)
+    engine = normalize_engine_value(raw_engine)
+    if engine != raw_engine:
+        settings.setValue('screenshot/long_stitch_engine', engine)
+        print(f"📖 检测到长截图引擎旧值 {raw_engine}，已自动转换为 {engine}")
+    else:
+        print(f"📖 从配置加载长截图引擎: {engine}")
     return engine
 
 def _load_long_stitch_config():
     """从配置文件加载所有长截图参数"""
     settings = QSettings('Fandes', 'jietuba')
     
+    raw_engine = settings.value('screenshot/long_stitch_engine', 'python', type=str)
+    engine = normalize_engine_value(raw_engine)
+    if engine != raw_engine:
+        settings.setValue('screenshot/long_stitch_engine', engine)
+        print(f"📖 检测到长截图引擎旧值 {raw_engine}，已自动转换为 {engine}")
+    
     config = {
-        'engine': settings.value('screenshot/long_stitch_engine', 'auto', type=str),
+        'engine': engine,
         'sample_rate': settings.value('screenshot/rust_sample_rate', 0.6, type=float),
         'min_sample_size': settings.value('screenshot/rust_min_sample_size', 300, type=int),
         'max_sample_size': settings.value('screenshot/rust_max_sample_size', 800, type=int),
@@ -146,9 +160,14 @@ class ScrollCaptureWindow(QWidget):
         # 实时拼接相关
         self.stitched_result = None  # 当前拼接的结果图
         
+        # 🆕 会话级别的引擎状态（整个滚动截图期间保持一致）
+        # None=未初始化, "rust"=特征匹配, "python"=哈希匹配
+        # 一旦设置后就不会改变（除非从rust失败切换到python）
+        self.session_engine = None
+        
         # 滚动检测相关
         self.last_scroll_time = 0  # 最后一次滚动的时间戳
-        self.scroll_cooldown = 0.3  # 滚动后延迟截图时间（秒）- 改为更短
+        self.scroll_cooldown = 0.17  # 滚动后延迟截图时间（秒）- 改为更短
         self.capture_mode = "immediate"  # 截图模式: "immediate"立即 或 "wait"等待停止
         
         # 去重相关
@@ -670,39 +689,63 @@ class ScrollCaptureWindow(QWidget):
             # 添加到截图列表（仍保留列表，用于最后的备份）
             self.screenshots.append(pil_image)
             
-            # 🆕 智能拼接策略：根据引擎选择拼接方式
+            # 🆕 智能拼接策略：会话级别的引擎选择
             screenshot_count = len(self.screenshots)
             
             try:
-                from jietuba_long_stitch_unified import stitch_images, config
+                from jietuba_long_stitch_unified import stitch_images, get_active_engine
+
+                # 🎯 确定本次会话使用的引擎（首次拼接时确定，后续保持不变）
+                if self.session_engine is None:
+                    # 🆕 首次拼接：检测配置的引擎（只在第一次调用）
+                    self.session_engine = get_active_engine()
+                    print(f"\n🎮 [引擎选择] 初始引擎: {self.session_engine} ({'特征匹配' if self.session_engine == 'rust' else '哈希匹配'})")
+                else:
+                    # ✅ 后续拼接：使用已锁定的引擎
+                    print(f"🔒 [引擎锁定] 继续使用: {self.session_engine} ({'特征匹配' if self.session_engine == 'rust' else '哈希匹配'})")
                 
-                # 检测当前引擎类型
-                current_engine = config.engine
-                
-                # Rust 引擎：必须使用全量拼接（有状态服务）
-                # Python 引擎：使用增量拼接（更快）
-                if current_engine == "rust":
-                    # 🦀 Rust 引擎：传入所有截图（特征点需要完整上下文）
-                    print(f"🔗 全量拼接（共 {screenshot_count} 张）- Rust 引擎...")
+                # 根据会话引擎选择拼接策略
+                if self.session_engine == "rust":
+                    # 🎯 特征匹配：传入所有截图（特征点需要完整上下文）
+                    print(f"🔗 全量拼接（共 {screenshot_count} 张）- 特征匹配算法...")
                     result = stitch_images(self.screenshots.copy())
+                    
                     if result:
                         self.stitched_result = result
                         print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
                     else:
-                        print("⚠️ Rust 拼接失败，保持原结果")
+                        # ⚠️ 特征匹配失败 → 切换到哈希匹配
+                        print("\n⚠️ 特征匹配失败！")
+                        print("🔄 切换到哈希匹配算法（本次会话将一直使用哈希匹配）\n")
+                        
+                        self.session_engine = "python"  # ✅ 永久切换到哈希匹配（不会再改回来）
+                        
+                        # 🎯 保留之前成功的结果，只拼接新图片
                         if self.stitched_result is None:
+                            # 第一次拼接就失败，只有1张图
+                            print("📌 第一次拼接失败，使用当前截图作为基础")
                             self.stitched_result = pil_image
+                        else:
+                            # 之前有成功的结果，保留它，只拼接新图片
+                            print(f"📌 保留之前成功的结果（{len(self.screenshots)-1} 张）")
+                            print(f"🔗 使用哈希匹配拼接新图片...")
+                            temp_result = stitch_images([self.stitched_result, pil_image])
+                            if temp_result:
+                                self.stitched_result = temp_result
+                                print(f"✅ 哈希匹配成功，结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                            else:
+                                print("⚠️ 哈希匹配也失败，保持原结果")
                 
                 else:
-                    # 🐍 Python 引擎 或 Auto 模式：使用增量拼接
+                    # 哈希匹配：使用增量拼接
                     if self.stitched_result is None:
                         # 第一张图片
-                        print(f"🔗 初始化第 {screenshot_count} 张图片...")
+                        print(f"🔗 初始化第 {screenshot_count} 张图片（哈希匹配）...")
                         self.stitched_result = pil_image
                         print(f"✅ 第一张图片作为基础，尺寸: {pil_image.size[0]}x{pil_image.size[1]}")
                     else:
                         # 🚀 增量拼接：只拼接 [上次结果, 新截图]
-                        print(f"🔗 增量拼接第 {screenshot_count} 张图片...")
+                        print(f"🔗 增量拼接第 {screenshot_count} 张图片（哈希匹配）...")
                         result = stitch_images([self.stitched_result, pil_image])
                         if result:
                             self.stitched_result = result
