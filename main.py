@@ -39,6 +39,7 @@ from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot, QAbstractNativeEventF
 from jietuba_screenshot import Slabel
 from jietuba_public import CONFIG_DICT
 from jietuba_settings import SettingsDialog
+from jietuba_long_stitch_unified import normalize_engine_value
 
 # 内置全局快捷键实现（Windows）
 # 使用 RegisterHotKey + 原生事件过滤器捕获 WM_HOTKEY
@@ -360,7 +361,7 @@ class ConfigManager:
     def __init__(self):
         # 使用与项目一致的设置命名空间
         self.settings = QSettings('Fandes', 'jietuba')
-        self.hotkey_default = "ctrl+shift+a"
+        self.hotkey_default = "ctrl+1"
         self.right_click_close_default = True
         self.smart_selection_default = False  # 智能选择默认关闭
         self.taskbar_button_default = False  # 任务栏按钮默认关闭
@@ -390,11 +391,16 @@ class ConfigManager:
     
     def get_long_stitch_engine(self):
         """获取长截图拼接引擎设置"""
-        return self.settings.value('screenshot/long_stitch_engine', 'auto', type=str)
+        raw_value = self.settings.value('screenshot/long_stitch_engine', 'python', type=str)
+        normalized = normalize_engine_value(raw_value)
+        if normalized != raw_value:
+            self.settings.setValue('screenshot/long_stitch_engine', normalized)
+        return normalized
     
     def set_long_stitch_engine(self, engine):
         """设置长截图拼接引擎"""
-        self.settings.setValue('screenshot/long_stitch_engine', engine)
+        normalized = normalize_engine_value(engine)
+        self.settings.setValue('screenshot/long_stitch_engine', normalized)
     
     # 绘画工具配置管理
     def get_tool_settings(self):
@@ -884,7 +890,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.05 | 更新日: 2025.11/17")
+        self.version_label = QLabel("バージョン: 1.06 | 更新日: 2025.11/19")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
