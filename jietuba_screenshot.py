@@ -2630,12 +2630,19 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.y1 = y
         if self.y1 > self.y0:
             self.y1 += 1
+        elif self.y1 < self.y0:
+            self.y1 -= 1
         else:
-            self.y0 += 1
+            # 完全水平拖动时，保证至少1px高度
+            self.y1 = self.y0 + (1 if y >= self.ry0 else -1)
+
         if self.x1 > self.x0:
             self.x1 += 1
+        elif self.x1 < self.x0:
+            self.x1 -= 1
         else:
-            self.x0 += 1
+            # 完全垂直拖动时，保证至少1px宽度
+            self.x1 = self.x0 + (1 if x >= self.rx0 else -1)
 
     def mousePressEvent(self, event):
         # 如果是钉图模式并且有绘图工具激活，检查事件是否来自钉图窗口的委托
