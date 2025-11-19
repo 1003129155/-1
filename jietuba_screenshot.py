@@ -1971,6 +1971,57 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         print(f"📋 钉图备份: 复制截图历史，裁剪区域: ({crop_x}, {crop_y}, {crop_w}, {crop_h})")
         freezer.copy_screenshot_backup_history(crop_x, crop_y, crop_w, crop_h)
         
+        # 🧹 立即清理主窗口的全屏图片和备份历史（释放大量内存）
+        total_freed_mb = 0
+        
+        # 1. 清理备份历史列表
+        if hasattr(self, 'backup_pic_list') and self.backup_pic_list:
+            backup_count = len(self.backup_pic_list)
+            try:
+                total_pixels = sum(p.width() * p.height() for p in self.backup_pic_list if p and not p.isNull())
+                freed_mb = total_pixels * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理备份历史: {backup_count} 个备份, 约 {freed_mb:.1f}MB")
+            except Exception as e:
+                print(f"🧹 清理备份历史: {backup_count} 个备份")
+            
+            self.backup_pic_list.clear()
+            self.backup_ssid = 0
+        
+        # 2. 清理原始图片副本
+        if hasattr(self, 'originalPix') and self.originalPix and not self.originalPix.isNull():
+            try:
+                freed_mb = self.originalPix.width() * self.originalPix.height() * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理原始图片: {self.originalPix.width()}x{self.originalPix.height()}, 约 {freed_mb:.1f}MB")
+            except:
+                print(f"🧹 清理原始图片")
+            self.originalPix = None
+        
+        # 3. 清理主窗口显示的图片（QLabel的pixmap）
+        if self.pixmap() and not self.pixmap().isNull():
+            try:
+                freed_mb = self.pixmap().width() * self.pixmap().height() * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理主窗口图片: {self.pixmap().width()}x{self.pixmap().height()}, 约 {freed_mb:.1f}MB")
+            except:
+                print(f"🧹 清理主窗口图片")
+            self.setPixmap(QPixmap())  # 设置为空图片
+        
+        # 4. 清理绘画层图片
+        if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap() and not self.paintlayer.pixmap().isNull():
+            try:
+                freed_mb = self.paintlayer.pixmap().width() * self.paintlayer.pixmap().height() * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理绘画层图片: {self.paintlayer.pixmap().width()}x{self.paintlayer.pixmap().height()}, 约 {freed_mb:.1f}MB")
+            except:
+                print(f"🧹 清理绘画层图片")
+            self.paintlayer.setPixmap(QPixmap())  # 设置为空图片
+        
+        print(f"✅ 主窗口图片资源已清空，共释放约 {total_freed_mb:.1f}MB 内存")
+        print(f"💡 钉图窗口已有裁剪后的备份（占用更小），主窗口资源可安全释放")
+
+        
         # 在创建钉图窗口时自动保存图片到桌面上的スクショ文件夹
         try:
             timestamp = time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())

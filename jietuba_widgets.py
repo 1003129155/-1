@@ -479,8 +479,8 @@ class PinnedPaintLayer(QLabel):
             empty_pix.fill(Qt.transparent)
             self.setPixmap(empty_pix)
             
-            # 断开引用
-            self.parent = None
+            # ⚠️ 断开循环引用 - 防止内存泄漏
+            self._parent_widget = None
             self.main_window = None
             
             # 调用父类清理
@@ -2357,20 +2357,18 @@ class Freezer(QLabel):
             return
         
         # 立即从主窗口的列表中移除自己
-        if self.main_window and hasattr(self.main_window, 'freeze_imgs'):
+        main_window_ref = self.main_window  # 保存引用
+        if main_window_ref and hasattr(main_window_ref, 'freeze_imgs'):
             try:
-                if self in self.main_window.freeze_imgs:
-                    self.main_window.freeze_imgs.remove(self)
-                    print(f"✅ [关闭事件] 已从主窗口列表中移除钉图窗口 (剩余: {len(self.main_window.freeze_imgs)})")
-                    
-                    # 立即强制垃圾回收
-                    import gc
-                    gc.collect()
+                if self in main_window_ref.freeze_imgs:
+                    main_window_ref.freeze_imgs.remove(self)
+                    print(f"✅ [关闭事件] 已从主窗口列表中移除钉图窗口 (剩余: {len(main_window_ref.freeze_imgs)})")
                     
                     # 如果这是最后一个窗口，执行深度清理
-                    if len(self.main_window.freeze_imgs) == 0:
+                    if len(main_window_ref.freeze_imgs) == 0:
                         print("🧹 [最后窗口] 执行深度内存清理...")
                         # 多次垃圾回收确保彻底清理
+                        import gc
                         for _ in range(3):
                             gc.collect()
                         try:
@@ -2382,6 +2380,9 @@ class Freezer(QLabel):
                         
             except (ValueError, AttributeError) as ex:
                 print(f"⚠️ 从列表移除时出错: {ex}")
+        
+        # 断开循环引用 - 防止内存泄漏
+        self.main_window = None
         
         # 立即执行清理，不等待
         try:
@@ -2399,10 +2400,12 @@ class Freezer(QLabel):
         # 立即删除，不等待定时器
         self.deleteLater()
         
-        # 立即强制处理删除事件
+        # 立即强制处理删除事件和垃圾回收
         try:
             from PyQt5.QtCore import QCoreApplication
             QCoreApplication.processEvents()
+            import gc
+            gc.collect()
         except:
             pass
         

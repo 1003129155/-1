@@ -161,9 +161,12 @@ class ScrollCaptureWindow(QWidget):
         self.stitched_result = None  # 当前拼接的结果图
         
         # 🆕 会话级别的引擎状态（整个滚动截图期间保持一致）
-        # None=未初始化, "rust"=特征匹配, "python"=哈希匹配
-        # 一旦设置后就不会改变（除非从rust失败切换到python）
+        # None=未初始化, "rust"=特征匹配, "hash_rust"/"hash_python"=哈希匹配
+        # 一旦设置后就不会改变（除非从rust失败切换到hash_rust）
         self.session_engine = None
+        
+        # 🚀 特征匹配专用：持久化的拼接器实例（增量拼接）
+        self.rust_stitcher = None  # RustLongStitch 实例
         
         # 滚动检测相关
         self.last_scroll_time = 0  # 最后一次滚动的时间戳
@@ -706,38 +709,78 @@ class ScrollCaptureWindow(QWidget):
                 
                 # 根据会话引擎选择拼接策略
                 if self.session_engine == "rust":
-                    # 🎯 特征匹配：传入所有截图（特征点需要完整上下文）
-                    print(f"🔗 全量拼接（共 {screenshot_count} 张）- 特征匹配算法...")
-                    result = stitch_images(self.screenshots.copy())
+                    # 🚀 特征匹配：使用持久化的拼接器实例，真正的增量拼接
                     
-                    if result:
-                        self.stitched_result = result
-                        print(f"✅ 拼接完成，当前结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                    # 首次创建拼接器实例
+                    if self.rust_stitcher is None:
+                        print(f"🔧 创建 RustLongStitch 拼接器实例...")
+                        from jietuba_long_stitch_rust import RustLongStitch
+                        from jietuba_long_stitch_unified import config
+                        
+                        self.rust_stitcher = RustLongStitch(
+                            direction=config.direction,
+                            sample_rate=config.sample_rate,
+                            min_sample_size=config.min_sample_size,
+                            max_sample_size=config.max_sample_size,
+                            corner_threshold=config.corner_threshold,
+                            descriptor_patch_size=config.descriptor_patch_size,
+                            min_size_delta=config.min_size_delta,
+                            try_rollback=config.try_rollback,
+                            distance_threshold=config.distance_threshold,
+                            ef_search=config.ef_search,
+                        )
+                        print(f"✅ 拼接器已创建，参数: corner_threshold={config.corner_threshold}, distance_threshold={config.distance_threshold}")
+                    
+                    # 增量添加新图片
+                    print(f"🔗 增量添加第 {screenshot_count} 张图片（特征匹配）...")
+                    overlap = self.rust_stitcher.add_image(pil_image, direction=1, debug=True)
+                    
+                    if screenshot_count == 1:
+                        # 第一张图片
+                        print(f"✅ 第一张图片已添加，尺寸: {pil_image.size[0]}x{pil_image.size[1]}")
+                        # 临时导出查看当前状态
+                        self.stitched_result = self.rust_stitcher.export()
+                    elif overlap is not None:
+                        # 成功找到重叠
+                        print(f"✅ 成功匹配，重叠区域: {overlap} 像素")
+                        # 临时导出查看当前状态
+                        self.stitched_result = self.rust_stitcher.export()
+                        if self.stitched_result:
+                            print(f"✅ 当前拼接结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
                     else:
                         # ⚠️ 特征匹配失败 → 切换到哈希匹配
-                        print("\n⚠️ 特征匹配失败！")
+                        print(f"\n⚠️ 第 {screenshot_count} 张图片特征匹配失败！")
                         print("🔄 切换到哈希匹配算法（本次会话将一直使用哈希匹配）\n")
                         
-                        self.session_engine = "python"  # ✅ 永久切换到哈希匹配（不会再改回来）
+                        # 导出当前成功的结果
+                        if self.rust_stitcher:
+                            temp_result = self.rust_stitcher.export()
+                            if temp_result:
+                                self.stitched_result = temp_result
+                                print(f"📌 保留之前成功的结果: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
                         
-                        # 🎯 保留之前成功的结果，只拼接新图片
-                        if self.stitched_result is None:
-                            # 第一次拼接就失败，只有1张图
-                            print("📌 第一次拼接失败，使用当前截图作为基础")
-                            self.stitched_result = pil_image
-                        else:
-                            # 之前有成功的结果，保留它，只拼接新图片
-                            print(f"📌 保留之前成功的结果（{len(self.screenshots)-1} 张）")
+                        # 清理rust拼接器并切换引擎
+                        self.rust_stitcher.clear()
+                        self.rust_stitcher = None
+                        self.session_engine = "hash_rust"  # ✅ 永久切换到哈希匹配
+                        
+                        # 使用哈希匹配拼接当前图片
+                        if self.stitched_result:
                             print(f"🔗 使用哈希匹配拼接新图片...")
+                            from jietuba_long_stitch_unified import stitch_images
                             temp_result = stitch_images([self.stitched_result, pil_image])
                             if temp_result:
                                 self.stitched_result = temp_result
                                 print(f"✅ 哈希匹配成功，结果尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
                             else:
                                 print("⚠️ 哈希匹配也失败，保持原结果")
+                        else:
+                            # 如果连第一张都没成功，直接用当前图片
+                            self.stitched_result = pil_image
+                            print("📌 使用当前截图作为基础")
                 
                 else:
-                    # 哈希匹配：使用增量拼接
+                    # 哈希匹配：使用增量拼接（hash_rust 或 hash_python）
                     if self.stitched_result is None:
                         # 第一张图片
                         print(f"🔗 初始化第 {screenshot_count} 张图片（哈希匹配）...")
@@ -746,6 +789,7 @@ class ScrollCaptureWindow(QWidget):
                     else:
                         # 🚀 增量拼接：只拼接 [上次结果, 新截图]
                         print(f"🔗 增量拼接第 {screenshot_count} 张图片（哈希匹配）...")
+                        from jietuba_long_stitch_unified import stitch_images
                         result = stitch_images([self.stitched_result, pil_image])
                         if result:
                             self.stitched_result = result
@@ -808,6 +852,20 @@ class ScrollCaptureWindow(QWidget):
     def _on_finish(self):
         """完成按钮点击"""
         print(f"✅ 完成长截图，共 {len(self.screenshots)} 张图片")
+        
+        # 🚀 如果使用特征匹配，导出最终结果
+        if self.session_engine == "rust" and self.rust_stitcher is not None:
+            print("📸 长截图完成，获取拼接结果...")
+            try:
+                final_result = self.rust_stitcher.export()
+                if final_result:
+                    self.stitched_result = final_result
+                    print(f"✅ 获取拼接结果，图片大小: {final_result.size}")
+                else:
+                    print("⚠️  导出结果为空")
+            except Exception as e:
+                print(f"❌ 导出拼接结果失败: {e}")
+        
         self._cleanup()
         self.finished.emit()
         self.close()
@@ -823,6 +881,16 @@ class ScrollCaptureWindow(QWidget):
     def _cleanup(self):
         """清理资源"""
         try:
+            # 🧹 清理特征匹配拼接器
+            if hasattr(self, 'rust_stitcher') and self.rust_stitcher is not None:
+                try:
+                    self.rust_stitcher.clear()
+                    print("✅ 已清理 RustLongStitch 拼接器")
+                except Exception as e:
+                    print(f"⚠️  清理拼接器时出错: {e}")
+                finally:
+                    self.rust_stitcher = None
+            
             # 停止所有定时器
             if hasattr(self, 'capture_timer'):
                 self.capture_timer.stop()

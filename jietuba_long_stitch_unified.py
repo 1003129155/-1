@@ -12,18 +12,19 @@ import os
 def normalize_engine_value(value):
     """
     规范化引擎设置值
-    将用户输入的各种可能值统一为标准的 'auto', 'rust', 'python'
+    将用户输入的各种可能值统一为标准的 'auto', 'rust', 'hash_rust', 'hash_python'
     
     算法说明:
-        'auto'   -> 自动选择（优先特征匹配）
-        'rust'   -> 特征点匹配算法（FAST+ORB+HNSW，纯 Rust）
-        'python' -> 哈希值匹配算法（LCS，Python + Rust 混合加速）
+        'auto'        -> 自动选择（优先特征匹配）
+        'rust'        -> 特征点匹配算法（FAST+ORB+HNSW，纯 Rust）
+        'hash_rust'   -> 哈希值匹配算法（纯 Rust，最快）
+        'hash_python' -> 哈希值匹配算法（纯 Python，调试用）
     
     参数:
         value: 引擎设置值（支持多种别名）
     
     返回:
-        标准化的引擎值: 'auto', 'rust', 'python'
+        标准化的引擎值: 'auto', 'rust', 'hash_rust', 'hash_python'
     """
     if not value or not isinstance(value, str):
         return "auto"
@@ -42,13 +43,22 @@ def normalize_engine_value(value):
     ):
         return "rust"
     
-    # 哈希匹配的各种别名
+    # Rust哈希匹配的各种别名
     elif value_lower in (
+        "hash_rust", "hashrust", "rustハッシュ値", "rust_hash",
+        "rust哈希", "rust_lcs"
+    ):
+        return "hash_rust"
+    
+    # Python哈希匹配的各种别名
+    elif value_lower in (
+        "hash_python", "hashpython", "pythonハッシュ値", "python_hash",
+        "python哈希", "python_lcs",
         "python", "py", "python版本", "python版",
         "hash", "hash_matching", "哈希", "哈希匹配",
         "画像ハッシュ値", "ハッシュ値", "lcs"
     ):
-        return "python"
+        return "hash_python"
     
     else:
         # 未知值，返回默认值
@@ -61,11 +71,12 @@ class LongStitchConfig:
     # 引擎选择（新命名 - 反映实际算法）
     ENGINE_AUTO = "auto"                    # 自动选择（优先特征匹配）
     ENGINE_FEATURE_MATCHING = "rust"        # 特征点匹配算法（纯 Rust 实现）
-    ENGINE_HASH_MATCHING = "python"         # 哈希值匹配算法（Python + Rust 混合）
+    ENGINE_HASH_RUST = "hash_rust"          # 哈希值匹配算法（纯 Rust，最快）
+    ENGINE_HASH_PYTHON = "hash_python"      # 哈希值匹配算法（纯 Python，调试）
     
     # 向后兼容的别名（保持旧代码可用）
-    ENGINE_RUST = "rust"      # 别名：特征点匹配（纯 Rust）
-    ENGINE_PYTHON = "python"  # 别名：哈希值匹配（Python/混合）
+    ENGINE_RUST = "rust"           # 别名：特征点匹配（纯 Rust）
+    ENGINE_PYTHON = "hash_python"  # 别名：哈希值匹配（Python）
     
     def __init__(self):
         # 默认配置
@@ -204,13 +215,17 @@ def _detect_engine() -> str:
     检测可用的引擎
     
     返回:
-        "rust"   - 特征点匹配算法（纯 Rust）
-        "python" - 哈希值匹配算法（Python/混合）
+        "rust"        - 特征点匹配算法（Rust FAST+ORB）
+        "hash_rust"   - 哈希值匹配算法（Rust LCS）
+        "hash_python" - 哈希值匹配算法（Python LCS）
     """
-    # 强制指定哈希匹配
-    if config.engine == LongStitchConfig.ENGINE_PYTHON:
-        return "python"
-    # 强制指定特征匹配
+    # 强制指定哈希匹配（Python版）
+    if config.engine == LongStitchConfig.ENGINE_HASH_PYTHON:
+        return "hash_python"
+    # 强制指定哈希匹配（Rust版）
+    elif config.engine == LongStitchConfig.ENGINE_HASH_RUST:
+        return "hash_rust"
+    # 强制指定特征匹配（Rust版）
     elif config.engine == LongStitchConfig.ENGINE_RUST:
         return "rust"
     
@@ -220,8 +235,8 @@ def _detect_engine() -> str:
         return "rust"  # 特征点匹配
     except ImportError:
         if config.verbose:
-            print("[长截图] 特征匹配模块（Rust）未安装，使用哈希匹配（Python/混合）")
-        return "python"  # 哈希值匹配
+            print("[长截图] 特征匹配模块（Rust）未安装，使用哈希匹配（Rust）")
+        return "hash_rust"  # 哈希值匹配（优先Rust）
 
 
 def stitch_images(images: List[Image.Image]) -> Optional[Image.Image]:
@@ -250,7 +265,8 @@ def stitch_images(images: List[Image.Image]) -> Optional[Image.Image]:
     if config.verbose:
         engine_name = {
             "rust": "特征点匹配（Rust FAST+ORB）",
-            "python": "哈希值匹配（Python LCS）"
+            "hash_rust": "哈希值匹配（Rust LCS，快11倍）",
+            "hash_python": "哈希值匹配（Python LCS，调试）"
         }.get(engine, engine.upper())
         print(f"[长截图] 🚀 使用 {engine_name} 拼接 {len(images)} 张图片")
     
@@ -270,23 +286,38 @@ def stitch_images(images: List[Image.Image]) -> Optional[Image.Image]:
                     if config.verbose:
                         print("[长截图] 🔄 自动回退到哈希匹配算法...")
                     try:
-                        result = _stitch_with_python(images)
+                        result = _stitch_with_hash_rust(images)
                         if result and config.verbose:
-                            print(f"[长截图] ✅ 哈希匹配拼接成功（回退）")
+                            print(f"[长截图] ✅ 哈希匹配拼接成功（回退到Rust哈希）")
                         return result
                     except Exception as e2:
                         if config.verbose:
                             print(f"[长截图] ❌ 哈希匹配也失败: {e2}")
                         return None
                 return None
+        elif engine == "hash_rust":
+            result = _stitch_with_hash_rust(images)
+            if result and config.verbose:
+                print(f"[长截图] ✅ Rust哈希匹配拼接成功")
+            return result
+        elif engine == "hash_python":
+            result = _stitch_with_hash_python(images)
+            if result and config.verbose:
+                print(f"[长截图] ✅ Python哈希匹配拼接成功")
+            return result
         else:
-            result = _stitch_with_python(images)
+            # 默认使用hash_python
+            result = _stitch_with_hash_python(images)
             if result and config.verbose:
                 print(f"[长截图] ✅ 哈希匹配拼接成功")
             return result
     except Exception as e:
         if config.verbose:
-            algorithm_name = "特征点匹配" if engine == "rust" else "哈希匹配"
+            algorithm_name = {
+                "rust": "特征点匹配",
+                "hash_rust": "Rust哈希匹配",
+                "hash_python": "Python哈希匹配"
+            }.get(engine, "未知算法")
             print(f"[长截图] ❌ {algorithm_name}拼接失败: {e}")
         
         # 如果特征匹配失败且是 AUTO 模式，尝试回退到哈希匹配
@@ -294,7 +325,7 @@ def stitch_images(images: List[Image.Image]) -> Optional[Image.Image]:
             if config.verbose:
                 print("[长截图] 🔄 自动回退到哈希匹配算法...")
             try:
-                result = _stitch_with_python(images)
+                result = _stitch_with_hash_rust(images)
                 if result and config.verbose:
                     print(f"[长截图] ✅ 哈希匹配拼接成功（回退）")
                 return result
@@ -329,13 +360,59 @@ def _stitch_with_rust(images: List[Image.Image]) -> Optional[Image.Image]:
 
 
 def _stitch_with_python(images: List[Image.Image]) -> Optional[Image.Image]:
-    """使用哈希匹配算法拼接（Python + Rust 混合加速）"""
-    from jietuba_long_stitch import stitch_pil_images
+    """使用哈希匹配算法拼接（Python + Rust 混合加速）- 已弃用"""
+    # 这个函数保留是为了兼容，实际应该使用 _stitch_with_hash_python
+    return _stitch_with_hash_python(images)
+
+
+def _stitch_with_hash_rust(images: List[Image.Image]) -> Optional[Image.Image]:
+    """使用哈希匹配算法拼接（Rust LCS，快11倍）"""
+    from jietuba_long_stitch import stitch_images_rust
     
-    result = stitch_pil_images(
-        images,
-        ignore_right_pixels=config.ignore_right_pixels,
-    )
+    if len(images) == 0:
+        return None
+    if len(images) == 1:
+        return images[0]
+    
+    # 逐对拼接
+    result = images[0]
+    for i in range(1, len(images)):
+        result = stitch_images_rust(
+            result,
+            images[i],
+            ignore_right_pixels=config.ignore_right_pixels,
+            debug=config.verbose,  # 根据配置决定是否输出调试信息
+        )
+        if result is None:
+            if config.verbose:
+                print(f"[长截图] ⚠️  第{i+1}张图片拼接失败")
+            return None
+    
+    return result
+
+
+def _stitch_with_hash_python(images: List[Image.Image]) -> Optional[Image.Image]:
+    """使用哈希匹配算法拼接（Python LCS，用于调试）"""
+    from jietuba_long_stitch import stitch_images_python
+    
+    if len(images) == 0:
+        return None
+    if len(images) == 1:
+        return images[0]
+    
+    # 逐对拼接
+    result = images[0]
+    for i in range(1, len(images)):
+        result = stitch_images_python(
+            result,
+            images[i],
+            ignore_right_pixels=config.ignore_right_pixels,
+            debug=config.verbose,  # 根据配置决定是否输出调试信息
+        )
+        if result is None:
+            if config.verbose:
+                print(f"[长截图] ⚠️  第{i+1}张图片拼接失败")
+            return None
     
     return result
 

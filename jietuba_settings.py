@@ -258,7 +258,8 @@ class SettingsDialog(QDialog):
         self.engine_combo = QComboBox()
         self.engine_combo.addItem("🔄 自動選択", "auto")
         self.engine_combo.addItem("⚡ ピクセル特徴", "rust")
-        self.engine_combo.addItem("🐍 画像ハッシュ値", "python")
+        self.engine_combo.addItem("🦀 Rustハッシュ値", "hash_rust")
+        self.engine_combo.addItem("🐍 Pythonハッシュ値", "hash_python")
         
         # 设置当前选中的引擎
         current_engine = self.config_manager.get_long_stitch_engine()
@@ -273,8 +274,9 @@ class SettingsDialog(QDialog):
         # 引擎说明
         engine_desc = QLabel(
             "• 自動選択: 画像の特徴に応じて最適なエンジンを自動選択します\n"
-            "• ピクセル特徴: 特徴点マッチングを使用し、高速処理が可能です\n"
-            "• 画像ハッシュ値: ハッシュ値によるマッチングで、より安定した結果を提供します"
+            "• ピクセル特徴: 特徴点マッチングを使用し、高速処理が可能です（既存）\n"
+            "• Rustハッシュ値: Rust実装、ハッシュ値マッチング（最速、11倍高速）\n"
+            "• Pythonハッシュ値: Python実装、ハッシュ値マッチング（デバッグ用）"
         )
         engine_desc.setStyleSheet("color: #666; font-size: 9pt; margin-top: 10px;")
         group_layout.addWidget(engine_desc)
@@ -597,7 +599,7 @@ class SettingsDialog(QDialog):
             self.sample_rate_input.setValue(1.0)
             self.min_sample_size_input.setValue(300)
             self.max_sample_size_input.setValue(800)
-            self.corner_threshold_input.setValue(5)
+            self.corner_threshold_input.setValue(10)
             self.descriptor_patch_size_input.setValue(9)
             self.min_size_delta_input.setValue(1)
             self.try_rollback_checkbox.setChecked(True)
