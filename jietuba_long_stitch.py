@@ -14,14 +14,18 @@ import io
 import time
 
 # 尝试导入 Rust 加速模块
-try:
-    import jietuba_rust
-    RUST_AVAILABLE = True
-    print("✅ Rust 加速模块已加载")
-except ImportError:
-    RUST_AVAILABLE = False
-    print("⚠️  Rust 模块未找到，使用 Python 实现（性能较慢）")
-    print("   提示: 运行 'cd rs && maturin build --release' 编译 Rust 模块")
+# 🔧 临时禁用 Rust 以便调试 Python 实现
+RUST_AVAILABLE = False
+print("🔧 [调试模式] 已强制禁用 Rust，使用纯 Python 实现")
+
+# try:
+#     import jietuba_rust
+#     RUST_AVAILABLE = True
+#     print("✅ Rust 加速模块已加载")
+# except ImportError:
+#     RUST_AVAILABLE = False
+#     print("⚠️  Rust 模块未找到，使用 Python 实现（性能较慢）")
+#     print("   提示: 运行 'cd rs && maturin build --release' 编译 Rust 模块")
 
 # 性能统计
 _performance_stats = {
@@ -68,6 +72,9 @@ def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> Li
     
     # 获取所有像素数据
     pixels = image.load()
+    
+    # 🔍 调试：记录一些样本哈希值
+    sample_rows = []
 
     for y in range(height):
         # 计算行的平均色彩值（不使用 numpy）
@@ -99,10 +106,20 @@ def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> Li
             
             # 生成哈希值
             row_hash = hash((r_mean, g_mean, b_mean))
+            
+            # 🔍 记录样本数据（每100行记录一次）
+            if y % 100 == 0:
+                sample_rows.append((y, r_mean, g_mean, b_mean, row_hash))
         else:
             row_hash = 0
         
         row_hashes.append(row_hash)
+    
+    # 🔍 打印样本哈希值
+    if len(sample_rows) > 0:
+        print(f"  📊 样本哈希值（每100行）:")
+        for y, r, g, b, h in sample_rows[:3]:  # 只显示前3个样本
+            print(f"     行{y}: RGB({r},{g},{b}) -> hash={h}")
 
     # 统计性能
     elapsed = time.perf_counter() - start_time
@@ -145,6 +162,17 @@ def find_longest_common_substring(
     # 🐍 Python 回退实现
     m, n = len(seq1), len(seq2)
     min_length = int(min(m, n) * min_ratio)
+    
+    print(f"  🔍 [LCS调试] 序列长度: seq1={m}, seq2={n}")
+    print(f"  🔍 [LCS调试] 最小匹配长度阈值: {min_length} (min_ratio={min_ratio})")
+    
+    # 🔍 先检查是否有任何相同的哈希值
+    common_hashes = set(seq1) & set(seq2)
+    print(f"  🔍 [LCS调试] 找到 {len(common_hashes)} 个公共哈希值（共 seq1={len(set(seq1))}, seq2={len(set(seq2))}）")
+    
+    if len(common_hashes) == 0:
+        print(f"  ❌ [LCS调试] 两个序列没有任何公共哈希值！")
+        return (-1, -1, 0)
 
     # 动态规划表
     dp = [[0] * (n + 1) for _ in range(m + 1)]
@@ -152,24 +180,33 @@ def find_longest_common_substring(
     max_length = 0
     ending_pos_i = 0
     ending_pos_j = 0
+    
+    # 🔍 记录所有匹配点
+    match_count = 0
 
     for i in range(1, m + 1):
         for j in range(1, n + 1):
             if seq1[i - 1] == seq2[j - 1]:
                 dp[i][j] = dp[i - 1][j - 1] + 1
+                match_count += 1
                 if dp[i][j] > max_length:
                     max_length = dp[i][j]
                     ending_pos_i = i
                     ending_pos_j = j
             else:
                 dp[i][j] = 0
+    
+    print(f"  🔍 [LCS调试] 找到 {match_count} 个哈希匹配点")
+    print(f"  🔍 [LCS调试] 最长公共子串长度: {max_length}")
 
     if max_length < min_length:
+        print(f"  ❌ [LCS调试] 最长子串({max_length}) < 阈值({min_length})，判定为无重叠")
         result = (-1, -1, 0)
     else:
         # 计算起始位置
         start_i = ending_pos_i - max_length
         start_j = ending_pos_j - max_length
+        print(f"  ✅ [LCS调试] 找到有效重叠: seq1[{start_i}:{ending_pos_i}] ↔ seq2[{start_j}:{ending_pos_j}]")
         result = (start_i, start_j, max_length)
     
     # 统计性能
@@ -229,19 +266,34 @@ def find_best_overlap(
 ) -> Tuple[int, int, int]:
     """
     寻找最佳重叠区域
-    直接在整张图片上寻找最长公共子串
+    对于连续滚动截图,只在 img1 的底部搜索(范围为 img2 的高度)
+    这样可以避免匹配到页面中重复的内容
     """
-    print(f"  搜索重叠区域: img1有{len(img1_hashes)}行, img2有{len(img2_hashes)}行")
+    img1_len = len(img1_hashes)
+    img2_len = len(img2_hashes)
+    
+    # 🎯 关键优化:只在 img1 底部搜索(搜索范围 = img2 的高度)
+    # 因为滚动截图总是连续的,新截图一定是从上一张的底部开始
+    search_start = max(0, img1_len - img2_len)
+    img1_search_region = img1_hashes[search_start:]
+    
+    print(f"  🔍 搜索重叠区域:")
+    print(f"     img1总长度: {img1_len}行")
+    print(f"     img2总长度: {img2_len}行")
+    print(f"     搜索范围: img1[{search_start}:{img1_len}] (底部{len(img1_search_region)}行)")
 
-    # 先尝试更低的阈值
-    overlap = find_longest_common_substring(img1_hashes, img2_hashes, min_ratio=0.01)
+    # 在限定范围内搜索最长公共子串
+    overlap = find_longest_common_substring(img1_search_region, img2_hashes, min_ratio=0.01)
 
     if overlap[2] > 0:
-        overlap_ratio = overlap[2] / min(len(img1_hashes), len(img2_hashes))
-        print(f"  找到重叠: 长度{overlap[2]}行, 占比{overlap_ratio:.2%}")
-        return overlap
+        # 将相对位置转换回绝对位置
+        absolute_start_i = overlap[0] + search_start
+        overlap_ratio = overlap[2] / min(len(img1_search_region), img2_len)
+        print(f"  ✅ 找到重叠: 长度{overlap[2]}行, 占比{overlap_ratio:.2%}")
+        print(f"     绝对位置: img1[{absolute_start_i}:{absolute_start_i + overlap[2]}]")
+        return (absolute_start_i, overlap[1], overlap[2])
     else:
-        print("  未找到任何重叠区域")
+        print("  ❌ 未找到任何重叠区域")
         return (-1, -1, 0)
 
 
