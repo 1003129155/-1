@@ -26,7 +26,13 @@ import os
 import gc
 import time
 import threading
+import io
+import atexit
+import traceback
+import signal
+import faulthandler
 from datetime import datetime
+from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QComboBox, QSystemTrayIcon, QMenu, QAction, 
@@ -52,6 +58,133 @@ MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000  # 避免长按重复触发（Vista+）
+
+RUNTIME_LOG_DIR = Path.home() / ".jietuba" / "logs"
+RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_RUNTIME_LOG_FILE = None
+_RUNTIME_WATCHDOG_READY = False
+_RUNTIME_START_TS = time.time()
+_ORIGINAL_STDOUT = sys.stdout
+_ORIGINAL_STDERR = sys.stderr
+_ORIGINAL_SYS_EXCEPTHOOK = sys.excepthook
+_ORIGINAL_THREADING_EXCEPTHOOK = getattr(threading, "excepthook", None)
+_WATCHDOG_LOCK = threading.Lock()
+
+
+class _TeeStream(io.TextIOBase):
+    """将 stdout/stderr 同步写入多个流（终端 + 文件）。"""
+
+    def __init__(self, *targets):
+        super().__init__()
+        self._targets = [t for t in targets if t]
+
+    def write(self, data):
+        for target in self._targets:
+            try:
+                target.write(data)
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self):
+        for target in self._targets:
+            try:
+                target.flush()
+            except Exception:
+                pass
+
+
+def _runtime_log(message: str):
+    """将关键事件写入 watchdog 日志文件。"""
+    global _RUNTIME_LOG_FILE
+    if _RUNTIME_LOG_FILE is None:
+        return
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        _RUNTIME_LOG_FILE.write(f"{timestamp} {message}\n")
+        _RUNTIME_LOG_FILE.flush()
+    except Exception:
+        pass
+
+
+def _setup_runtime_watchdogs():
+    """初始化 stdout/异常/信号 监控，便于定位无日志退出。"""
+    global _RUNTIME_WATCHDOG_READY, _RUNTIME_LOG_FILE
+    if _RUNTIME_WATCHDOG_READY:
+        return
+
+    try:
+        log_path = RUNTIME_LOG_DIR / f"runtime_{datetime.now():%Y%m%d}.log"
+        _RUNTIME_LOG_FILE = open(log_path, "a", encoding="utf-8", buffering=1)
+    except Exception as exc:
+        print(f"⚠️ [Watchdog] 无法创建日志文件: {exc}")
+        return
+
+    # 重定向 stdout/stderr（保留原输出）
+    sys.stdout = _TeeStream(_ORIGINAL_STDOUT, _RUNTIME_LOG_FILE)
+    sys.stderr = _TeeStream(_ORIGINAL_STDERR, _RUNTIME_LOG_FILE)
+
+    # 启用 faulthandler，捕获底层崩溃栈
+    try:
+        faulthandler.enable(_RUNTIME_LOG_FILE, all_threads=True)
+    except Exception as exc:
+        _runtime_log(f"⚠️ [Watchdog] 启用 faulthandler 失败: {exc}")
+
+    def _handle_exception(exc_type, exc_value, exc_tb):
+        stack = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        _runtime_log(f"❌ [Watchdog] 未捕获异常:\n{stack}")
+        if _ORIGINAL_SYS_EXCEPTHOOK:
+            _ORIGINAL_SYS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _handle_exception
+
+    if hasattr(threading, "excepthook"):
+        def _threading_hook(args):
+            stack = ''.join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+            _runtime_log(f"❌ [Watchdog] 线程异常 (name={getattr(args.thread, 'name', 'unknown')}):\n{stack}")
+            if _ORIGINAL_THREADING_EXCEPTHOOK:
+                _ORIGINAL_THREADING_EXCEPTHOOK(args)
+
+        threading.excepthook = _threading_hook
+
+    def _handle_signal(sig_name):
+        def _inner(signum, frame):
+            _runtime_log(f"⚠️ [Watchdog] 收到信号 {sig_name}({signum})，准备退出")
+            if sig_name in {"SIGINT", "SIGTERM", "SIGBREAK"}:
+                app = QApplication.instance()
+                if app is not None:
+                    app.quit()
+                else:
+                    sys.exit(0)
+        return _inner
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        if hasattr(signal, sig_name):
+            try:
+                signal.signal(getattr(signal, sig_name), _handle_signal(sig_name))
+            except Exception:
+                pass
+    if hasattr(signal, "SIGBREAK"):
+        try:
+            signal.signal(signal.SIGBREAK, _handle_signal("SIGBREAK"))
+        except Exception:
+            pass
+
+    def _atexit_hook():
+        uptime = time.time() - _RUNTIME_START_TS
+        _runtime_log(f"📦 [Watchdog] 进程准备退出 (atexit)，运行时长 {uptime:.0f}s")
+
+    atexit.register(_atexit_hook)
+
+    def _heartbeat():
+        while True:
+            uptime = time.time() - _RUNTIME_START_TS
+            _runtime_log(f"❤️ [Watchdog] 心跳，pid={os.getpid()}，线程数={threading.active_count()}，运行 {uptime/3600:.2f}h")
+            time.sleep(600)
+
+    threading.Thread(target=_heartbeat, daemon=True).start()
+    _runtime_log("🚀 [Watchdog] 日志守护已启动")
+    _RUNTIME_WATCHDOG_READY = True
 
 
 # AppSettingsDialog类已合并到SettingsDialog中
@@ -558,8 +691,7 @@ class MainWindow(QMainWindow):
                 print(f"   DPI比例: {self._last_dpi_ratio:.2f} -> {current_dpi_ratio:.2f}")
                 
                 # 通知截图模块刷新屏幕缓存
-                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
-                    self.screenshot_widget.refresh_screen_cache()
+                self._schedule_screen_cache_refresh()
                 
                 # 重新设置窗口大小以适应新的显示器配置
                 self._setup_window_size()
@@ -595,6 +727,21 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             print(f"❌ [ERROR] 窗口状态检查时出错: {e}")
+
+    def _schedule_screen_cache_refresh(self):
+        """在后台线程刷新屏幕缓存，避免阻塞UI线程。"""
+        if getattr(self, '_screen_cache_refresh_inflight', False):
+            return
+
+        def _do_refresh():
+            try:
+                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
+                    self.screenshot_widget.refresh_screen_cache()
+            finally:
+                self._screen_cache_refresh_inflight = False
+
+        self._screen_cache_refresh_inflight = True
+        threading.Thread(target=_do_refresh, daemon=True).start()
 
     def _setup_screenshot(self):
         """初始化截图组件"""
@@ -1245,6 +1392,9 @@ class MainWindow(QMainWindow):
 
 def main():
     """主函数"""
+    _setup_runtime_watchdogs()
+    _runtime_log("🚀 [Watchdog] main() 启动")
+
     app = QApplication(sys.argv)
     # 托盘应用关键设置：避免所有窗口被隐藏/关闭时自动退出
 

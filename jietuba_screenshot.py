@@ -19,6 +19,8 @@ import math
 import os
 import sys
 import time
+import ctypes
+from ctypes import wintypes
 from collections import deque
 from PyQt5.QtCore import QPoint, QRectF, QMimeData, QSize
 from PyQt5.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
@@ -227,10 +229,37 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         """由主程序调用，强制刷新屏幕缓存（解决休眠后拔插显示器问题）"""
         try:
             print("🔄 [截图] 收到屏幕变化通知，刷新缓存...")
-            # 发送轻量级系统消息，让Qt重新检测屏幕
-            import ctypes
-            ctypes.windll.user32.SendMessageW(0xFFFF, 0x001A, 0, 0)
-            print("✅ [截图] 屏幕缓存已刷新")
+            if not sys.platform.startswith("win"):
+                print("ℹ️ [截图] 非Windows环境，跳过刷新")
+                return
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            HWND_BROADCAST = 0xFFFF
+            WM_SETTINGCHANGE = 0x001A
+            SMTO_ABORTIFHUNG = 0x0002
+            SMTO_NOTIMEOUTIFNOTHUNG = 0x0008
+            timeout_ms = 200
+
+            start = time.time()
+            result = wintypes.DWORD()
+            ok = user32.SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG,
+                timeout_ms,
+                ctypes.byref(result)
+            )
+
+            if ok == 0:
+                last_error = kernel32.GetLastError()
+                print(f"⚠️ [截图] SendMessageTimeout 超时/失败(err={last_error})，改用 PostMessage")
+                user32.PostMessageW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0)
+            else:
+                cost = (time.time() - start) * 1000
+                print(f"✅ [截图] 屏幕缓存刷新完成，耗时 {cost:.1f} ms")
         except Exception as e:
             print(f"⚠️ [截图] 刷新屏幕缓存失败: {e}")
 
