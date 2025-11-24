@@ -141,6 +141,256 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
+class FloatingToolbar(QWidget):
+    """可拖动的浮动工具栏窗口"""
+    
+    # 信号定义
+    direction_changed = pyqtSignal()
+    manual_capture = pyqtSignal()
+    finish_clicked = pyqtSignal()
+    cancel_clicked = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        
+        # 拖动相关
+        self.dragging = False
+        self.drag_position = QPoint()
+        self.resize_mode = None  # None, 'left', 'right'
+        self.resize_start_pos = QPoint()
+        self.resize_start_geometry = QRect()
+        
+        self._setup_toolbar_window()
+        self._setup_toolbar_ui()
+        
+    def _setup_toolbar_window(self):
+        """设置工具栏窗口属性"""
+        self.setWindowFlags(
+            Qt.WindowStaysOnTopHint | 
+            Qt.FramelessWindowHint |
+            Qt.Tool
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
+        # 设置初始大小
+        self.setFixedHeight(40)
+        self.setMinimumWidth(500)
+        
+    def _setup_toolbar_ui(self):
+        """设置工具栏UI"""
+        # 主容器
+        container = QWidget()
+        container.setStyleSheet("""
+            QWidget {
+                background-color: rgba(40, 40, 40, 230);
+                border: 2px solid #555;
+                border-radius: 5px;
+            }
+        """)
+        
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(container)
+        
+        # 工具栏布局
+        toolbar_layout = QHBoxLayout(container)
+        toolbar_layout.setContentsMargins(10, 5, 10, 5)
+        toolbar_layout.setSpacing(8)
+        
+        # 左侧拖动手柄
+        left_handle = QLabel("⋮⋮")
+        left_handle.setStyleSheet("""
+            color: #888; 
+            font-size: 14pt; 
+            font-weight: bold;
+            padding: 0 5px;
+        """)
+        left_handle.setCursor(Qt.SizeHorCursor)
+        left_handle.setToolTip("ドラッグして移動")
+        toolbar_layout.addWidget(left_handle)
+        self.left_handle = left_handle
+        
+        # 方向切换按钮
+        self.direction_btn = QPushButton("↕️ 縦")
+        self.direction_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                font-size: 9pt;
+                border-radius: 3px;
+                font-weight: bold;
+                min-width: 50px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.direction_btn.clicked.connect(self.direction_changed.emit)
+        toolbar_layout.addWidget(self.direction_btn)
+        
+        # 提示文字标签
+        self.tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
+        self.tip_label.setStyleSheet("color: #FFD700; font-size: 8pt; font-weight: bold;")
+        toolbar_layout.addWidget(self.tip_label)
+        
+        toolbar_layout.addStretch()
+        
+        # 截图计数标签
+        self.count_label = QLabel("スクショ: 0 枚")
+        self.count_label.setStyleSheet("""
+            color: white; 
+            font-size: 9pt;
+            padding: 5px 10px;
+            border-radius: 3px;
+            background-color: rgba(255, 255, 255, 0.1);
+        """)
+        self.count_label.setCursor(Qt.PointingHandCursor)
+        self.count_label.setToolTip("クリックして手動でスクリーンショット")
+        self.count_label.mousePressEvent = lambda event: self._on_count_label_clicked(event)
+        toolbar_layout.addWidget(self.count_label)
+        
+        # 完成按钮
+        self.finish_btn = QPushButton("完了")
+        self.finish_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                font-size: 9pt;
+                border-radius: 3px;
+                font-weight: bold;
+                min-width: 50px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.finish_btn.clicked.connect(self.finish_clicked.emit)
+        toolbar_layout.addWidget(self.finish_btn)
+        
+        # 取消按钮
+        self.cancel_btn = QPushButton("キャンセル")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                font-size: 9pt;
+                border-radius: 3px;
+                min-width: 70px;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.cancel_clicked.emit)
+        toolbar_layout.addWidget(self.cancel_btn)
+        
+        # 右侧拖动手柄
+        right_handle = QLabel("⋮⋮")
+        right_handle.setStyleSheet("""
+            color: #888; 
+            font-size: 14pt; 
+            font-weight: bold;
+            padding: 0 5px;
+        """)
+        right_handle.setCursor(Qt.SizeHorCursor)
+        right_handle.setToolTip("ドラッグして移動")
+        toolbar_layout.addWidget(right_handle)
+        self.right_handle = right_handle
+        
+    def _on_count_label_clicked(self, event):
+        """点击计数标签触发手动截图"""
+        original_style = self.count_label.styleSheet()
+        self.count_label.setStyleSheet("""
+            color: white; 
+            font-size: 9pt;
+            padding: 5px 10px;
+            border-radius: 3px;
+            background-color: rgba(33, 150, 243, 200);
+        """)
+        self.manual_capture.emit()
+        QTimer.singleShot(200, lambda: self.count_label.setStyleSheet(original_style))
+        
+    def update_count(self, count):
+        """更新截图计数"""
+        self.count_label.setText(f"スクショ: {count} 枚")
+        
+    def update_direction(self, direction):
+        """更新方向显示"""
+        if direction == "horizontal":
+            self.direction_btn.setText("↔️ 横")
+            self.tip_label.setText(" Shift、ボタン")
+        else:
+            self.direction_btn.setText("↕️ 縦")
+            self.tip_label.setText(" 一方向に上から下へゆっくりスクロール")
+    
+    def mousePressEvent(self, event):
+        """鼠标按下事件 - 开始拖动或调整大小"""
+        if event.button() == Qt.LeftButton:
+            # 检查是否点击在手柄上
+            left_handle_rect = self.left_handle.geometry()
+            right_handle_rect = self.right_handle.geometry()
+            
+            pos = event.pos()
+            
+            if left_handle_rect.contains(pos) or right_handle_rect.contains(pos):
+                # 点击在手柄上 - 开始拖动
+                self.dragging = True
+                self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+                self.setCursor(Qt.ClosedHandCursor)
+            elif pos.x() < 20:
+                # 点击在左边缘 - 左侧调整大小
+                self.resize_mode = 'left'
+                self.resize_start_pos = event.globalPos()
+                self.resize_start_geometry = self.geometry()
+            elif pos.x() > self.width() - 20:
+                # 点击在右边缘 - 右侧调整大小
+                self.resize_mode = 'right'
+                self.resize_start_pos = event.globalPos()
+                self.resize_start_geometry = self.geometry()
+                
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 执行拖动或调整大小"""
+        if event.buttons() == Qt.LeftButton:
+            if self.dragging:
+                # 拖动窗口
+                self.move(event.globalPos() - self.drag_position)
+            elif self.resize_mode == 'left':
+                # 从左边调整大小
+                delta = event.globalPos() - self.resize_start_pos
+                new_x = self.resize_start_geometry.x() + delta.x()
+                new_width = self.resize_start_geometry.width() - delta.x()
+                
+                if new_width >= self.minimumWidth():
+                    self.setGeometry(new_x, self.y(), new_width, self.height())
+            elif self.resize_mode == 'right':
+                # 从右边调整大小
+                delta = event.globalPos() - self.resize_start_pos
+                new_width = self.resize_start_geometry.width() + delta.x()
+                
+                if new_width >= self.minimumWidth():
+                    self.resize(new_width, self.height())
+        else:
+            # 更新鼠标光标
+            pos = event.pos()
+            if pos.x() < 20 or pos.x() > self.width() - 20:
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+                
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件 - 结束拖动或调整大小"""
+        if event.button() == Qt.LeftButton:
+            self.dragging = False
+            self.resize_mode = None
+            self.setCursor(Qt.ArrowCursor)
+
 class ScrollCaptureWindow(QWidget):
     """滚动长截图窗口
     
@@ -211,6 +461,9 @@ class ScrollCaptureWindow(QWidget):
         self._setup_window()
         self._setup_ui()
         self._setup_mouse_hook()
+        
+        # 创建独立的浮动工具栏
+        self._setup_floating_toolbar()
         
         # 添加强制窗口定位修复定时器（作为最后的保险）
         self._position_fix_timer = QTimer()
@@ -327,121 +580,53 @@ class ScrollCaptureWindow(QWidget):
         # 修复多显示器窗口定位问题
         window_x, window_y = self._get_correct_window_position(border_width)
         
+        # 不再包含按钮栏高度（工具栏已独立）
         self.setGeometry(
             window_x,
             window_y,
             self.capture_rect.width() + border_width * 2,
-            self.capture_rect.height() + border_width * 2 + button_bar_height
+            self.capture_rect.height() + border_width * 2
         )
         
     def _setup_ui(self):
-        """设置UI界面"""
+        """设置UI界面 - 只保留透明边框区域"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)  # 为边框预留空间
         layout.setSpacing(0)
         
-        # 上方透明区域（用于显示边框）
+        # 透明区域（用于显示边框）
         self.transparent_area = QWidget()
         self.transparent_area.setFixedSize(
             self.capture_rect.width(),
             self.capture_rect.height()
         )
         layout.addWidget(self.transparent_area)
+    
+    def _setup_floating_toolbar(self):
+        """创建并设置独立的浮动工具栏"""
+        self.toolbar = FloatingToolbar(self)
         
-        # 底部按钮栏
-        button_bar = QWidget()
-        button_bar.setStyleSheet("""
-            QWidget {
-                background-color: rgba(40, 40, 40, 200);
-                border: 1px solid #555;
-                border-radius: 3px;
-            }
-        """)
-        button_bar.setFixedHeight(35)  # 从50改为35，让按钮栏更窄
+        # 连接工具栏信号
+        self.toolbar.direction_changed.connect(self._toggle_direction)
+        self.toolbar.manual_capture.connect(self._on_manual_capture)
+        self.toolbar.finish_clicked.connect(self._on_finish)
+        self.toolbar.cancel_clicked.connect(self._on_cancel)
         
-        button_layout = QHBoxLayout(button_bar)  # 改回水平布局
-        button_layout.setContentsMargins(8, 3, 8, 3)  # 减小边距，从(10,5,10,5)改为(8,3,8,3)
+        # 计算工具栏位置（默认在截图区域下方居中）
+        toolbar_x = self.x() + (self.width() - self.toolbar.width()) // 2
+        toolbar_y = self.y() + self.height() + 10  # 距离截图区域下方10像素
         
-        # 🆕 方向切换按钮（放在最左侧）
-        self.direction_btn = QPushButton("↕️ 縦")
-        self.direction_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                font-size: 9pt;
-                border-radius: 3px;
-                font-weight: bold;
-                min-width: 50px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        self.direction_btn.clicked.connect(self._toggle_direction)
-        button_layout.addWidget(self.direction_btn)
+        # 检查是否超出屏幕底部
+        app = QApplication.instance()
+        desktop = app.desktop()
+        screen_geometry = desktop.screenGeometry(self)
         
-        # 提示文字标签（放在左侧）
-        self.tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
-        self.tip_label.setStyleSheet("color: #FFD700; font-size: 8pt; font-weight: bold;")  # 字体从9pt改为8pt
-        button_layout.addWidget(self.tip_label)
+        if toolbar_y + self.toolbar.height() > screen_geometry.bottom():
+            # 如果超出底部，放在截图区域上方
+            toolbar_y = self.y() - self.toolbar.height() - 10
         
-        button_layout.addStretch()
-        
-        # 截图计数标签（支持点击手动截图）
-        self.count_label = QLabel("スクショ: 0 枚")
-        self.count_label.setStyleSheet("""
-            color: white; 
-            font-size: 9pt;
-            padding: 4px 8px;
-            border-radius: 3px;
-        """)
-        self.count_label.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针为手型
-        self.count_label.setToolTip("クリックして手動でスクリーンショット")  # 提示文字
-        self.count_label.mousePressEvent = lambda event: self._on_count_label_clicked(event)
-        button_layout.addWidget(self.count_label)
-        
-        # 完成按钮
-        self.finish_btn = QPushButton("完了")
-        self.finish_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                font-size: 9pt;
-                border-radius: 3px;
-                font-weight: bold;
-                min-width: 40px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        self.finish_btn.clicked.connect(self._on_finish)
-        button_layout.addWidget(self.finish_btn)
-        
-        # 取消按钮
-        self.cancel_btn = QPushButton("キャンセル")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                font-size: 9pt;
-                border-radius: 3px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-        """)
-        self.cancel_btn.clicked.connect(self._on_cancel)
-        button_layout.addWidget(self.cancel_btn)
-        
-        layout.addWidget(button_bar)
+        self.toolbar.move(toolbar_x, toolbar_y)
+        self.toolbar.show()
         
     def _setup_mouse_hook(self):
         """设置Windows鼠标钩子以监听全局滚轮事件"""
@@ -506,13 +691,11 @@ class ScrollCaptureWindow(QWidget):
         """切换截图方向（竖向/横向）"""
         if self.scroll_direction == "vertical":
             self.scroll_direction = "horizontal"
-            self.direction_btn.setText("↔️ 横")
-            self.tip_label.setText("⚠️ Shiftで横スクロール")
+            self.toolbar.update_direction("horizontal")
             print("🔄 切换到横向截图模式")
         else:
             self.scroll_direction = "vertical"
-            self.direction_btn.setText("↕️ 縦")
-            self.tip_label.setText("⚠️ 一方向に上から下へゆっくりスクロール")
+            self.toolbar.update_direction("vertical")
             print("🔄 切换到竖向截图模式")
         
         # 重新配置拼接引擎
@@ -1041,8 +1224,8 @@ class ScrollCaptureWindow(QWidget):
                 print(f"📏 记录滚动距离: {self.current_scroll_distance}px")
                 self.current_scroll_distance = 0  # 重置累积距离
             
-            # 更新计数
-            self.count_label.setText(f"スクショ: {len(self.screenshots)} 枚")
+            # 更新工具栏计数
+            self.toolbar.update_count(len(self.screenshots))
             
             print(f"✅ 第 {len(self.screenshots)} 张截图完成 (尺寸: {pil_image.size[0]}x{pil_image.size[1]})")
             
@@ -1106,27 +1289,12 @@ class ScrollCaptureWindow(QWidget):
         self.finished.emit()
         self.close()
     
-    def _on_count_label_clicked(self, event):
-        """点击计数标签时手动触发截图"""
+    def _on_manual_capture(self):
+        """手动截图（从工具栏触发）"""
         try:
-            print("🖱️ 用户点击计数标签，手动触发截图...")
-            
-            # 更新标签样式以提供视觉反馈
-            original_style = self.count_label.styleSheet()
-            self.count_label.setStyleSheet("""
-                color: white; 
-                font-size: 9pt;
-                padding: 4px 8px;
-                border-radius: 3px;
-                background-color: rgba(33, 150, 243, 150);
-            """)
-            
+            print("🖱️ 用户手动触发截图...")
             # 立即执行截图
             self._do_capture()
-            
-            # 200ms后恢复原始样式
-            QTimer.singleShot(200, lambda: self.count_label.setStyleSheet(original_style))
-            
         except Exception as e:
             print(f"❌ 手动截图失败: {e}")
             import traceback
@@ -1152,6 +1320,14 @@ class ScrollCaptureWindow(QWidget):
                     print(f"⚠️  清理拼接器时出错: {e}")
                 finally:
                     self.rust_stitcher = None
+            
+            # 关闭浮动工具栏
+            if hasattr(self, 'toolbar') and self.toolbar:
+                try:
+                    self.toolbar.close()
+                    print("✅ 浮动工具栏已关闭")
+                except Exception as e:
+                    print(f"⚠️ 关闭工具栏时出错: {e}")
             
             # 停止所有定时器
             if hasattr(self, 'capture_timer'):
