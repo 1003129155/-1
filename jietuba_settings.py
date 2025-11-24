@@ -256,13 +256,21 @@ class SettingsDialog(QDialog):
         group_layout.addWidget(engine_label)
         
         self.engine_combo = QComboBox()
-        self.engine_combo.addItem("🔄 自動選択", "auto")
-        self.engine_combo.addItem("⚡ ピクセル特徴", "rust")
+        # 🆕 暂时屏蔽自动选择和特征匹配，只保留哈希匹配选项
+        # self.engine_combo.addItem("🔄 自動選択", "auto")
+        # self.engine_combo.addItem("⚡ ピクセル特徴", "rust")
         self.engine_combo.addItem("🦀 Rustハッシュ値", "hash_rust")
         self.engine_combo.addItem("🐍 Pythonハッシュ値", "hash_python")
         
         # 设置当前选中的引擎
         current_engine = self.config_manager.get_long_stitch_engine()
+        
+        # 🆕 如果配置中是auto或rust，自动切换为hash_python
+        if current_engine in ('auto', 'rust'):
+            current_engine = 'hash_python'
+            self.config_manager.set_long_stitch_engine(current_engine)
+            print(f"⚠️ 检测到已禁用的引擎 {current_engine}，自动切换为 hash_python")
+        
         for i in range(self.engine_combo.count()):
             if self.engine_combo.itemData(i) == current_engine:
                 self.engine_combo.setCurrentIndex(i)
@@ -273,8 +281,6 @@ class SettingsDialog(QDialog):
         
         # 引擎说明
         engine_desc = QLabel(
-            "• 自動選択: 画像の特徴に応じて最適なエンジンを自動選択します\n"
-            "• ピクセル特徴: 特徴点マッチングを使用し、高速処理が可能です（既存）\n"
             "• Rustハッシュ値: Rust実装、ハッシュ値マッチング（最速、11倍高速）\n"
             "• Pythonハッシュ値: Python実装、ハッシュ値マッチング（デバッグ用）"
         )

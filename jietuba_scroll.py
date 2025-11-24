@@ -62,9 +62,15 @@ from jietuba_long_stitch_unified import (
 def _load_long_stitch_engine():
     """从配置文件加载长截图引擎设置"""
     settings = QSettings('Fandes', 'jietuba')
-    raw_engine = settings.value('screenshot/long_stitch_engine', 'python', type=str)
+    raw_engine = settings.value('screenshot/long_stitch_engine', 'hash_python', type=str)
     engine = normalize_engine_value(raw_engine)
-    if engine != raw_engine:
+    
+    # 🆕 如果检测到auto或rust，强制切换为hash_python
+    if engine in ('auto', 'rust'):
+        print(f"⚠️ 检测到已禁用的引擎 {engine}，自动切换为 hash_python")
+        engine = 'hash_python'
+        settings.setValue('screenshot/long_stitch_engine', engine)
+    elif engine != raw_engine:
         settings.setValue('screenshot/long_stitch_engine', engine)
         print(f"📖 检测到长截图引擎旧值 {raw_engine}，已自动转换为 {engine}")
     else:
@@ -75,9 +81,15 @@ def _load_long_stitch_config():
     """从配置文件加载所有长截图参数"""
     settings = QSettings('Fandes', 'jietuba')
     
-    raw_engine = settings.value('screenshot/long_stitch_engine', 'python', type=str)
+    raw_engine = settings.value('screenshot/long_stitch_engine', 'hash_python', type=str)
     engine = normalize_engine_value(raw_engine)
-    if engine != raw_engine:
+    
+    # 🆕 如果检测到auto或rust，强制切换为hash_python
+    if engine in ('auto', 'rust'):
+        print(f"⚠️ 检测到已禁用的引擎 {engine}，自动切换为 hash_python")
+        engine = 'hash_python'
+        settings.setValue('screenshot/long_stitch_engine', engine)
+    elif engine != raw_engine:
         settings.setValue('screenshot/long_stitch_engine', engine)
         print(f"📖 检测到长截图引擎旧值 {raw_engine}，已自动转换为 {engine}")
     
@@ -156,6 +168,13 @@ class ScrollCaptureWindow(QWidget):
         self.screenshots = []  # 存储截图的列表
         self.scroll_distances = []  # 存储每次滚动的距离（像素）
         self.current_scroll_distance = 0  # 当前累积的滚动距离
+        
+        # 🆕 截图方向: "vertical"(竖向) 或 "horizontal"(横向)
+        self.scroll_direction = "vertical"
+        
+        # 🆕 横向模式的键盘监听器
+        self.keyboard_listener = None
+        self.horizontal_scroll_key_pressed = False  # 防止重复触发
         
         # 实时拼接相关
         self.stitched_result = None  # 当前拼接的结果图
@@ -343,10 +362,30 @@ class ScrollCaptureWindow(QWidget):
         button_layout = QHBoxLayout(button_bar)  # 改回水平布局
         button_layout.setContentsMargins(8, 3, 8, 3)  # 减小边距，从(10,5,10,5)改为(8,3,8,3)
         
+        # 🆕 方向切换按钮（放在最左侧）
+        self.direction_btn = QPushButton("↕️ 縦")
+        self.direction_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                font-size: 9pt;
+                border-radius: 3px;
+                font-weight: bold;
+                min-width: 50px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.direction_btn.clicked.connect(self._toggle_direction)
+        button_layout.addWidget(self.direction_btn)
+        
         # 提示文字标签（放在左侧）
-        tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
-        tip_label.setStyleSheet("color: #FFD700; font-size: 8pt; font-weight: bold;")  # 字体从9pt改为8pt
-        button_layout.addWidget(tip_label)
+        self.tip_label = QLabel("⚠️ 一方向に上から下へゆっくりスクロール")
+        self.tip_label.setStyleSheet("color: #FFD700; font-size: 8pt; font-weight: bold;")  # 字体从9pt改为8pt
+        button_layout.addWidget(self.tip_label)
         
         button_layout.addStretch()
         
@@ -414,20 +453,35 @@ class ScrollCaptureWindow(QWidget):
                     from pynput import mouse  # 首次导入较慢，放后台
 
                     def on_scroll(x, y, dx, dy):
-                        """滚轮事件回调（在pynput线程中）"""
+                        """滚轮事件回调（在pynput线程中）
+                        dx: 横向滚动量（正值向右，负值向左）
+                        dy: 纵向滚动量（正值向上，负值向下）
+                        """
                         if self._is_mouse_in_capture_area(x, y):
-                            # 估算滚动距离（像素）- 一般滚轮一格约20-30像素
-                            scroll_pixels = int(abs(dy) * 25)  # dy为正值向上，负值向下
-                            print(f"🖱️ 检测到滚轮事件: ({x}, {y}), dy={dy}, 估算滚动距离: {scroll_pixels}px")
-                            try:
-                                self.scroll_detected.emit(scroll_pixels)
-                            except Exception as e:
-                                print(f"❌ 触发滚动信号失败: {e}")
+                            # 根据当前方向决定使用哪个滚动值
+                            if self.scroll_direction == "horizontal":
+                                # 横向模式：使用dx
+                                if dx != 0:
+                                    scroll_pixels = int(abs(dx) * 25)
+                                    print(f"🖱️ 检测到横向滚轮: ({x}, {y}), dx={dx}, 估算距离: {scroll_pixels}px")
+                                    try:
+                                        self.scroll_detected.emit(scroll_pixels)
+                                    except Exception as e:
+                                        print(f"❌ 触发滚动信号失败: {e}")
+                            else:
+                                # 竖向模式：使用dy
+                                if dy != 0:
+                                    scroll_pixels = int(abs(dy) * 25)
+                                    print(f"🖱️ 检测到竖向滚轮: ({x}, {y}), dy={dy}, 估算距离: {scroll_pixels}px")
+                                    try:
+                                        self.scroll_detected.emit(scroll_pixels)
+                                    except Exception as e:
+                                        print(f"❌ 触发滚动信号失败: {e}")
 
                     # 创建并启动监听器（pynput内部也会使用线程）
                     self.mouse_listener = mouse.Listener(on_scroll=on_scroll)
                     self.mouse_listener.start()
-                    print("✅ 全局滚轮监听器已启动")
+                    print("✅ 全局滚轮监听器已启动（支持横向和竖向）")
                 except Exception as e:
                     print(f"❌ 设置鼠标钩子失败: {e}")
                     import traceback
@@ -437,6 +491,148 @@ class ScrollCaptureWindow(QWidget):
 
         except Exception as e:
             print(f"❌ 设置窗口鼠标穿透时出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _toggle_direction(self):
+        """切换截图方向（竖向/横向）"""
+        if self.scroll_direction == "vertical":
+            self.scroll_direction = "horizontal"
+            self.direction_btn.setText("↔️ 横")
+            self.tip_label.setText("⚠️ 按Shift键触发横向滚动+截图")
+            print("🔄 切换到横向截图模式")
+        else:
+            self.scroll_direction = "vertical"
+            self.direction_btn.setText("↕️ 縦")
+            self.tip_label.setText("⚠️ 一方向に上から下へゆっくりスクロール")
+            print("🔄 切换到竖向截图模式")
+        
+        # 重新配置拼接引擎
+        self._reconfigure_stitch_engine()
+        
+        # 🆕 切换键盘监听器状态
+        if self.scroll_direction == "horizontal":
+            self._start_keyboard_listener()
+        else:
+            self._stop_keyboard_listener()
+    
+    def _send_horizontal_scroll(self):
+        """发送横向滚动指令（向右滚动）"""
+        try:
+            import win32api
+            import win32con
+            
+            # 使用Windows API发送横向滚动事件
+            # MOUSEEVENTF_HWHEEL: 横向滚动事件
+            # amount * 120: WHEEL_DELTA标准值
+            amount = 1  # 向右滚动
+            win32api.mouse_event(
+                win32con.MOUSEEVENTF_HWHEEL,
+                0, 0,
+                amount * 120,  # WHEEL_DELTA
+                0
+            )
+            print(f"✅ 发送横向滚动指令: 向右滚动 {amount} 格")
+            
+        except Exception as e:
+            print(f"❌ 发送横向滚动失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _start_keyboard_listener(self):
+        """启动键盘监听器（用于横向模式）"""
+        if self.keyboard_listener is not None:
+            return  # 已经启动
+        
+        try:
+            from pynput import keyboard
+            
+            def on_press(key):
+                """按键按下回调"""
+                try:
+                    # 使用Shift键触发横向滚动+截图
+                    if key == keyboard.Key.shift and not self.horizontal_scroll_key_pressed:
+                        self.horizontal_scroll_key_pressed = True
+                        print("⌨️ 检测到Shift按下，触发横向滚动+截图")
+                        
+                        # 发送横向滚动指令
+                        self._send_horizontal_scroll()
+                        
+                        # 延迟后截图（给页面时间滚动）
+                        QTimer.singleShot(int(self.scroll_cooldown * 1000), self._do_capture)
+                        
+                except Exception as e:
+                    print(f"❌ 处理按键事件失败: {e}")
+            
+            def on_release(key):
+                """按键释放回调"""
+                try:
+                    if key == keyboard.Key.shift:
+                        self.horizontal_scroll_key_pressed = False
+                except:
+                    pass
+            
+            # 创建并启动键盘监听器
+            self.keyboard_listener = keyboard.Listener(
+                on_press=on_press,
+                on_release=on_release
+            )
+            self.keyboard_listener.start()
+            print("✅ 键盘监听器已启动（横向模式，按Shift触发）")
+            
+        except Exception as e:
+            print(f"❌ 启动键盘监听器失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _stop_keyboard_listener(self):
+        """停止键盘监听器"""
+        if self.keyboard_listener is not None:
+            try:
+                self.keyboard_listener.stop()
+                self.keyboard_listener = None
+                print("✅ 键盘监听器已停止")
+            except Exception as e:
+                print(f"⚠️ 停止键盘监听器时出错: {e}")
+    
+    def _reconfigure_stitch_engine(self):
+        """重新配置拼接引擎方向"""
+        try:
+            from jietuba_long_stitch_unified import configure, config
+            
+            # 横向和竖向都使用竖向拼接（direction=0）
+            # 因为哈希匹配算法只支持竖向拼接
+            # 横向截图时，图片会被旋转90度，拼接后再旋转回来
+            direction = 0
+            
+            configure(
+                engine=config.engine,
+                direction=direction,
+                sample_rate=config.sample_rate,
+                min_sample_size=config.min_sample_size,
+                max_sample_size=config.max_sample_size,
+                corner_threshold=config.corner_threshold,
+                descriptor_patch_size=config.descriptor_patch_size,
+                min_size_delta=config.min_size_delta,
+                try_rollback=config.try_rollback,
+                distance_threshold=config.distance_threshold,
+                ef_search=config.ef_search,
+                verbose=True,
+            )
+            
+            mode_text = "横向截图（图片旋转90度+竖向拼接）" if self.scroll_direction == "horizontal" else "竖向截图（竖向拼接）"
+            print(f"✅ 拼接引擎已重新配置: {mode_text}")
+            
+            # 如果已经有rust拼接器实例，需要重新创建
+            if self.rust_stitcher is not None:
+                print("🔄 重置拼接器实例...")
+                self.rust_stitcher.clear()
+                self.rust_stitcher = None
+                self.session_engine = None
+                self.stitched_result = None
+                
+        except Exception as e:
+            print(f"❌ 重新配置拼接引擎失败: {e}")
             import traceback
             traceback.print_exc()
     
@@ -689,6 +885,17 @@ class ScrollCaptureWindow(QWidget):
                 'BGRA'
             ).convert('RGB')
             
+            # 🆕 横向模式：从第2张图片开始旋转90度（顺时针）以便使用竖向拼接算法
+            # 第1张图片不旋转（如果只截1张就不需要拼接和旋转）
+            # 第2张及以后的图片旋转后进行竖向拼接
+            is_first_image = len(self.screenshots) == 0
+            if self.scroll_direction == "horizontal" and not is_first_image:
+                print(f"🔄 横向模式：将图片顺时针旋转90度（第{len(self.screenshots)+1}张）")
+                pil_image = pil_image.rotate(-90, expand=True)  # -90度 = 顺时针90度
+                print(f"   旋转后尺寸: {pil_image.size[0]}x{pil_image.size[1]}")
+            elif self.scroll_direction == "horizontal" and is_first_image:
+                print(f"📸 横向模式：第1张图片不旋转（如果只有1张则无需拼接）")
+            
             # 添加到截图列表（仍保留列表，用于最后的备份）
             self.screenshots.append(pil_image)
             
@@ -789,6 +996,14 @@ class ScrollCaptureWindow(QWidget):
                     else:
                         # 🚀 增量拼接：只拼接 [上次结果, 新截图]
                         print(f"🔗 增量拼接第 {screenshot_count} 张图片（哈希匹配）...")
+                        
+                        # 🆕 横向模式：如果是第2张图片，需要先将第1张图片也旋转
+                        if self.scroll_direction == "horizontal" and screenshot_count == 2:
+                            print(f"🔄 横向模式：第2张图片拼接前，先将第1张图片也旋转90度")
+                            print(f"   第1张原尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                            self.stitched_result = self.stitched_result.rotate(-90, expand=True)
+                            print(f"   第1张旋转后: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+                        
                         from jietuba_long_stitch_unified import stitch_images
                         result = stitch_images([self.stitched_result, pil_image])
                         if result:
@@ -866,6 +1081,19 @@ class ScrollCaptureWindow(QWidget):
             except Exception as e:
                 print(f"❌ 导出拼接结果失败: {e}")
         
+        # 🆕 横向模式：将拼接结果逆时针旋转90度还原
+        # 注意：只有在有2张及以上图片（发生了拼接）时才旋转
+        # 如果只有1张图片，不需要旋转（第1张图片没有被旋转）
+        if (self.scroll_direction == "horizontal" and 
+            self.stitched_result is not None and 
+            len(self.screenshots) >= 2):
+            print(f"🔄 横向模式：将拼接结果逆时针旋转90度还原（共{len(self.screenshots)}张）")
+            print(f"   旋转前尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+            self.stitched_result = self.stitched_result.rotate(90, expand=True)  # 90度 = 逆时针90度
+            print(f"   旋转后尺寸: {self.stitched_result.size[0]}x{self.stitched_result.size[1]}")
+        elif self.scroll_direction == "horizontal" and len(self.screenshots) == 1:
+            print(f"📸 横向模式：只有1张图片，无需旋转")
+        
         self._cleanup()
         self.finished.emit()
         self.close()
@@ -905,6 +1133,10 @@ class ScrollCaptureWindow(QWidget):
             if hasattr(self, 'mouse_listener'):
                 self.mouse_listener.stop()
                 print("✅ 全局滚轮监听器已停止")
+            
+            # 🆕 停止键盘监听器
+            self._stop_keyboard_listener()
+            
         except Exception as e:
             print(f"⚠️ 清理资源时出错: {e}")
     
@@ -922,6 +1154,10 @@ class ScrollCaptureWindow(QWidget):
         
         Returns:
             PIL.Image: 拼接好的完整图片，如果没有截图则返回None
+            
+        注意：
+            - 竖向模式：返回原始拼接结果
+            - 横向模式：返回旋转后的结果（在_on_finish中已处理）
         """
         return self.stitched_result
     

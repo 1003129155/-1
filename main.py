@@ -524,15 +524,27 @@ class ConfigManager:
     
     def get_long_stitch_engine(self):
         """获取长截图拼接引擎设置"""
-        raw_value = self.settings.value('screenshot/long_stitch_engine', 'python', type=str)
+        raw_value = self.settings.value('screenshot/long_stitch_engine', 'hash_python', type=str)
         normalized = normalize_engine_value(raw_value)
-        if normalized != raw_value:
+        
+        # 🆕 如果检测到auto或rust，强制切换为hash_python
+        if normalized in ('auto', 'rust'):
+            print(f"⚠️ 检测到已禁用的引擎 {normalized}，自动切换为 hash_python")
+            normalized = 'hash_python'
+            self.settings.setValue('screenshot/long_stitch_engine', normalized)
+        elif normalized != raw_value:
             self.settings.setValue('screenshot/long_stitch_engine', normalized)
         return normalized
     
     def set_long_stitch_engine(self, engine):
         """设置长截图拼接引擎"""
         normalized = normalize_engine_value(engine)
+        
+        # 🆕 如果尝试设置auto或rust，强制切换为hash_python
+        if normalized in ('auto', 'rust'):
+            print(f"⚠️ 拒绝设置已禁用的引擎 {normalized}，自动切换为 hash_python")
+            normalized = 'hash_python'
+        
         self.settings.setValue('screenshot/long_stitch_engine', normalized)
     
     # 绘画工具配置管理

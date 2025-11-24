@@ -1829,7 +1829,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # 保存到文件（使用与普通截图相同的保存目录）
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"長スクショ_{timestamp}.png"
+            
+            # 🆕 根据截图方向设置文件名
+            direction_suffix = ""
+            if hasattr(self.scroll_capture_window, 'scroll_direction'):
+                if self.scroll_capture_window.scroll_direction == "horizontal":
+                    direction_suffix = "_横"
+                else:
+                    direction_suffix = "_縦"
+            
+            filename = f"長スクショ{direction_suffix}_{timestamp}.png"
             filepath = os.path.join(self.screenshot_save_dir, filename)
             
             try:
