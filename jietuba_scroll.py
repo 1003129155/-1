@@ -389,9 +389,17 @@ class ScrollCaptureWindow(QWidget):
         
         button_layout.addStretch()
         
-        # 截图计数标签
+        # 截图计数标签（支持点击手动截图）
         self.count_label = QLabel("スクショ: 0 枚")
-        self.count_label.setStyleSheet("color: white; font-size: 9pt;")  # 字体从11pt改为9pt
+        self.count_label.setStyleSheet("""
+            color: white; 
+            font-size: 9pt;
+            padding: 4px 8px;
+            border-radius: 3px;
+        """)
+        self.count_label.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针为手型
+        self.count_label.setToolTip("クリックして手動でスクリーンショット")  # 提示文字
+        self.count_label.mousePressEvent = lambda event: self._on_count_label_clicked(event)
         button_layout.addWidget(self.count_label)
         
         # 完成按钮
@@ -499,7 +507,7 @@ class ScrollCaptureWindow(QWidget):
         if self.scroll_direction == "vertical":
             self.scroll_direction = "horizontal"
             self.direction_btn.setText("↔️ 横")
-            self.tip_label.setText("⚠️ 按Shift键触发横向滚动+截图")
+            self.tip_label.setText("⚠️ Shiftで横スクロール")
             print("🔄 切换到横向截图模式")
         else:
             self.scroll_direction = "vertical"
@@ -1081,8 +1089,8 @@ class ScrollCaptureWindow(QWidget):
             except Exception as e:
                 print(f"❌ 导出拼接结果失败: {e}")
         
-        # 🆕 横向模式：将拼接结果逆时针旋转90度还原
-        # 注意：只有在有2张及以上图片（发生了拼接）时才旋转
+        # 横向模式：将拼接结果逆时针旋转90度还原
+        # 只有在有2张及以上图片（发生了拼接）时才旋转
         # 如果只有1张图片，不需要旋转（第1张图片没有被旋转）
         if (self.scroll_direction == "horizontal" and 
             self.stitched_result is not None and 
@@ -1097,6 +1105,32 @@ class ScrollCaptureWindow(QWidget):
         self._cleanup()
         self.finished.emit()
         self.close()
+    
+    def _on_count_label_clicked(self, event):
+        """点击计数标签时手动触发截图"""
+        try:
+            print("🖱️ 用户点击计数标签，手动触发截图...")
+            
+            # 更新标签样式以提供视觉反馈
+            original_style = self.count_label.styleSheet()
+            self.count_label.setStyleSheet("""
+                color: white; 
+                font-size: 9pt;
+                padding: 4px 8px;
+                border-radius: 3px;
+                background-color: rgba(33, 150, 243, 150);
+            """)
+            
+            # 立即执行截图
+            self._do_capture()
+            
+            # 200ms后恢复原始样式
+            QTimer.singleShot(200, lambda: self.count_label.setStyleSheet(original_style))
+            
+        except Exception as e:
+            print(f"❌ 手动截图失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _on_cancel(self):
         """取消按钮点击"""
