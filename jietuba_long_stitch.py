@@ -451,6 +451,7 @@ def stitch_images_rust(
     🚀 纯Rust拼接（最快，推荐用于生产环境）
     
     使用零拷贝的Rust实现，全程在Rust中处理，性能最优（比Python快11倍）
+    现在使用智能拼接（多候选纠错机制），准确性与Python一致
     
     参数:
         img1, img2: 要拼接的PIL图像
@@ -473,16 +474,16 @@ def stitch_images_rust(
         img1.save(buffer1, format='PNG')
         img2.save(buffer2, format='PNG')
         
-        # 调用Rust拼接函数
+        # 调用Rust智能拼接函数（多候选纠错机制）
         if debug:
-            result_bytes = jietuba_rust.stitch_two_images_rust_debug(
+            result_bytes = jietuba_rust.stitch_two_images_rust_smart_debug(
                 buffer1.getvalue(),
                 buffer2.getvalue(),
                 ignore_right_pixels,
                 0.01  # min_overlap_ratio
             )
         else:
-            result_bytes = jietuba_rust.stitch_two_images_rust(
+            result_bytes = jietuba_rust.stitch_two_images_rust_smart(
                 buffer1.getvalue(),
                 buffer2.getvalue(),
                 ignore_right_pixels,
