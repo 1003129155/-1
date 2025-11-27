@@ -62,9 +62,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 使用新的截图保存目录（桌面上的スクショ文件夹）
         self.screenshot_save_dir = get_screenshot_save_dir()
         
-        # 为了兼容性，仍然创建j_temp目录（用于临时文件）
-        if not os.path.exists("j_temp"):
-            os.mkdir("j_temp")
         # self.pixmap()=QPixmap()
         # 立即初始化选区相关状态，防止在 setup/init_parameters 之前被事件访问
         self.selection_active = False
