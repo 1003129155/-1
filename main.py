@@ -524,7 +524,7 @@ class ConfigManager:
     
     def get_long_stitch_engine(self):
         """获取长截图拼接引擎设置"""
-        raw_value = self.settings.value('screenshot/long_stitch_engine', 'hash_python', type=str)
+        raw_value = self.settings.value('screenshot/long_stitch_engine', 'hash_rust', type=str)
         normalized = normalize_engine_value(raw_value)
         
         # 🆕 如果检测到auto或rust，强制切换为hash_python
@@ -1049,7 +1049,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.06 | 更新日: 2025.11/19")
+        self.version_label = QLabel("バージョン: 1.07 | 更新日: 2025.11/26")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
