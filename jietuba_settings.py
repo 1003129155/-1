@@ -265,11 +265,11 @@ class SettingsDialog(QDialog):
         # 设置当前选中的引擎
         current_engine = self.config_manager.get_long_stitch_engine()
         
-        # 🆕 如果配置中是auto或rust，自动切换为hash_python
-        if current_engine in ('auto', 'rust'):
-            current_engine = 'hash_python'
-            self.config_manager.set_long_stitch_engine(current_engine)
-            print(f"⚠️ 检测到已禁用的引擎 {current_engine}，自动切换为 hash_python")
+        # 🆕 如果配置中是auto或rust，自动切换为hash_rust
+        if current_engine in ['auto', 'rust']:
+            current_engine = 'hash_rust'
+            self.main_window.set_long_stitch_engine(current_engine)
+            print(f"⚠️ 检测到已禁用的引擎 {current_engine}，自动切换为 hash_rust")
         
         for i in range(self.engine_combo.count()):
             if self.engine_combo.itemData(i) == current_engine:
