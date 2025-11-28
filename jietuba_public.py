@@ -98,11 +98,8 @@ def get_screenshot_save_dir():
         return screenshot_dir
     except Exception as e:
         print(f"创建截图保存目录失败: {e}")
-        # 如果失败，回退到当前目录的j_temp（为了兼容性）
-        fallback_dir = "j_temp"
-        if not os.path.exists(fallback_dir):
-            os.makedirs(fallback_dir)
-        return fallback_dir
+        # 如果失败，使用当前目录
+        return "."
 
 
 apppath = get_apppath()
