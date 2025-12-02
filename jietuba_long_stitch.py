@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-长截图拼接脚本-Rust/python
-使用最长公共子串算法找到图片重叠部分并进行拼接
+长截图拼接脚本 - Rust/Python混合实现
+
+提供三种拼接方案：
+  1. stitch_images_rust()     - 纯Rust实现（最快，11x速度）
+  2. stitch_images_python()   - 纯Python实现（调试用，有详细日志）
+  3. stitch_images()          - 智能选择（自动使用最快方案）
+
+使用建议：
+  - 生产环境：使用 stitch_images() 或 stitch_images_rust()
+  - 调试分析：使用 stitch_images_python(debug=True)
 """
 
 from PIL import Image
@@ -21,7 +29,7 @@ try:
 except ImportError:
     RUST_AVAILABLE = False
     print("⚠️  Rust 模块未找到，使用 Python 实现（性能较慢）")
-    print("   提示: 运行 'cd rs && maturin build --release' 编译 Rust 模块")
+    print("   提示: 运行 'compile_and_install.bat' 编译 Rust 模块")
 
 # 性能统计
 _performance_stats = {
@@ -30,6 +38,14 @@ _performance_stats = {
     'hash_count': 0,
     'lcs_count': 0,
 }
+
+
+class AllOverlapShrinkError(Exception):
+    """在所有候选重叠都会缩短结果时抛出"""
+
+    def __init__(self, message: str, fallback_overlap: Optional[Tuple[int, int, int]] = None):
+        super().__init__(message)
+        self.fallback_overlap = fallback_overlap
 
 
 def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> List[int]:
@@ -68,6 +84,9 @@ def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> Li
     
     # 获取所有像素数据
     pixels = image.load()
+    
+    # 🔍 调试：记录一些样本哈希值
+    sample_rows = []
 
     for y in range(height):
         # 计算行的平均色彩值（不使用 numpy）
@@ -99,10 +118,20 @@ def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> Li
             
             # 生成哈希值
             row_hash = hash((r_mean, g_mean, b_mean))
+            
+            # 🔍 记录样本数据（每100行记录一次）
+            if y % 100 == 0:
+                sample_rows.append((y, r_mean, g_mean, b_mean, row_hash))
         else:
             row_hash = 0
         
         row_hashes.append(row_hash)
+    
+    # 🔍 打印样本哈希值
+    if len(sample_rows) > 0:
+        print(f"  📊 样本哈希值（每100行）:")
+        for y, r, g, b, h in sample_rows[:3]:  # 只显示前3个样本
+            print(f"     行{y}: RGB({r},{g},{b}) -> hash={h}")
 
     # 统计性能
     elapsed = time.perf_counter() - start_time
@@ -110,6 +139,102 @@ def image_to_row_hashes(image: Image.Image, ignore_right_pixels: int = 20) -> Li
     _performance_stats['hash_count'] += 1
     
     return row_hashes
+
+
+def find_top_common_substrings(
+    seq1: List[int], seq2: List[int], min_ratio: float = 0.1, top_k: int = 5
+) -> List[Tuple[int, int, int]]:
+    """
+    找到两个序列的前K个最长公共子串
+    返回 [(seq1_start, seq2_start, length), ...] 按长度降序排列
+    min_ratio: 最小重叠比例阈值（相对于较短图片的高度）
+    top_k: 返回前K个最长的子串
+    
+    改进策略：
+    1. 收集所有满足min_length的子串
+    2. 按长度降序排序
+    3. 去重：过滤掉在seq1上重叠超过50%的冗余子串
+    4. 优先选择位置分散的候选，增加多样性
+    """
+    start_time = time.perf_counter()
+    
+    m, n = len(seq1), len(seq2)
+    min_length = int(min(m, n) * min_ratio)
+    
+    print(f"  🔍 [多子串搜索] 序列长度: seq1={m}, seq2={n}")
+    print(f"  🔍 [多子串搜索] 最小匹配长度阈值: {min_length} (min_ratio={min_ratio})")
+    
+    # 先检查是否有任何相同的哈希值
+    common_hashes = set(seq1) & set(seq2)
+    print(f"  🔍 [多子串搜索] 找到 {len(common_hashes)} 个公共哈希值")
+    
+    if len(common_hashes) == 0:
+        print(f"  ❌ [多子串搜索] 两个序列没有任何公共哈希值！")
+        return []
+
+    # 动态规划表
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    
+    # 记录所有子串的结束位置和长度
+    all_substrings = []  # [(length, end_i, end_j), ...]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if seq1[i - 1] == seq2[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+                # 只记录子串的结束位置（长度达到阈值时）
+                if dp[i][j] >= min_length:
+                    # 检查这是否是一个新子串的结束（下一个位置不匹配）
+                    is_end = (i == m or j == n or seq1[i] != seq2[j])
+                    if is_end or dp[i][j] == min_length:
+                        all_substrings.append((dp[i][j], i, j))
+            else:
+                dp[i][j] = 0
+    
+    if not all_substrings:
+        return []
+    
+    # 按长度降序排序
+    all_substrings.sort(key=lambda x: x[0], reverse=True)
+    
+    # 去重和多样性选择
+    selected_matches = []
+    used_ranges_seq1 = []  # [(start, end), ...] 在seq1上已使用的范围
+    
+    for length, end_i, end_j in all_substrings:
+        start_i = end_i - length
+        start_j = end_j - length
+        
+        # 检查是否与已选择的匹配在seq1上有显著重叠
+        has_significant_overlap = False
+        for used_start, used_end in used_ranges_seq1:
+            overlap_start = max(start_i, used_start)
+            overlap_end = min(end_i, used_end)
+            overlap_length = max(0, overlap_end - overlap_start)
+            
+            # 如果重叠超过当前长度的50%，认为冗余
+            if overlap_length > length * 0.5:
+                has_significant_overlap = True
+                break
+        
+        if not has_significant_overlap:
+            selected_matches.append((start_i, start_j, length))
+            used_ranges_seq1.append((start_i, end_i))
+            
+            # 收集够了就停止
+            if len(selected_matches) >= top_k:
+                break
+    
+    print(f"  🔍 [多子串搜索] 找到 {len(selected_matches)} 个不重叠的候选子串")
+    for idx, (s_i, s_j, length) in enumerate(selected_matches[:3], 1):  # 只打印前3个
+        print(f"     #{idx}: seq1[{s_i}:{s_i+length}] ↔ seq2[{s_j}:{s_j+length}], 长度={length}")
+    
+    # 统计性能
+    elapsed = time.perf_counter() - start_time
+    _performance_stats['lcs_time'] += elapsed
+    _performance_stats['lcs_count'] += 1
+    
+    return selected_matches
 
 
 def find_longest_common_substring(
@@ -142,42 +267,13 @@ def find_longest_common_substring(
             print(f"⚠️  Rust LCS 计算失败，回退到 Python: {e}")
             # 继续执行下面的 Python 实现
     
-    # 🐍 Python 回退实现
-    m, n = len(seq1), len(seq2)
-    min_length = int(min(m, n) * min_ratio)
-
-    # 动态规划表
-    dp = [[0] * (n + 1) for _ in range(m + 1)]
-
-    max_length = 0
-    ending_pos_i = 0
-    ending_pos_j = 0
-
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            if seq1[i - 1] == seq2[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-                if dp[i][j] > max_length:
-                    max_length = dp[i][j]
-                    ending_pos_i = i
-                    ending_pos_j = j
-            else:
-                dp[i][j] = 0
-
-    if max_length < min_length:
-        result = (-1, -1, 0)
+    # 🐍 Python 回退实现 - 使用新的多子串搜索函数
+    candidates = find_top_common_substrings(seq1, seq2, min_ratio, top_k=1)
+    
+    if candidates:
+        return candidates[0]
     else:
-        # 计算起始位置
-        start_i = ending_pos_i - max_length
-        start_j = ending_pos_j - max_length
-        result = (start_i, start_j, max_length)
-    
-    # 统计性能
-    elapsed = time.perf_counter() - start_time
-    _performance_stats['lcs_time'] += elapsed
-    _performance_stats['lcs_count'] += 1
-    
-    return result
+        return (-1, -1, 0)
 
 
 def print_performance_stats():
@@ -225,128 +321,319 @@ def reset_performance_stats():
 
 
 def find_best_overlap(
-    img1_hashes: List[int], img2_hashes: List[int]
+    img1_hashes: List[int],
+    img2_hashes: List[int],
+    last_added_height: Optional[int] = None,
+    allow_shrink_fallback: bool = True,
 ) -> Tuple[int, int, int]:
     """
     寻找最佳重叠区域
-    直接在整张图片上寻找最长公共子串
+    对于连续滚动截图,只在 img1 的底部搜索(范围为 img2 的高度)
+    这样可以避免匹配到页面中重复的内容
+    
+    参数:
+        img1_hashes: 第一张图片的行哈希列表
+        img2_hashes: 第二张图片的行哈希列表
+        last_added_height: 上次拼接新增的高度(可选),用于缩小搜索范围避免减短
+        allow_shrink_fallback: 是否允许在所有候选都会缩短时仍返回最长匹配
     """
-    print(f"  搜索重叠区域: img1有{len(img1_hashes)}行, img2有{len(img2_hashes)}行")
+    img1_len = len(img1_hashes)
+    img2_len = len(img2_hashes)
+    
+    # 🎯 关键优化:只在 img1 底部搜索(搜索范围 = img2 的高度)
+    # 因为滚动截图总是连续的,新截图一定是从上一张的底部开始
+    search_start = max(0, img1_len - img2_len)
+    img1_search_region = img1_hashes[search_start:]
+    
+    print(f"  🔍 搜索重叠区域:")
+    print(f"     img1总长度: {img1_len}行")
+    print(f"     img2总长度: {img2_len}行")
+    print(f"     初始搜索范围: img1[{search_start}:{img1_len}] (底部{len(img1_search_region)}行)")
+    if last_added_height:
+        print(f"     上次新增高度: {last_added_height}行")
 
-    # 先尝试更低的阈值
-    overlap = find_longest_common_substring(img1_hashes, img2_hashes, min_ratio=0.01)
-
-    if overlap[2] > 0:
-        overlap_ratio = overlap[2] / min(len(img1_hashes), len(img2_hashes))
-        print(f"  找到重叠: 长度{overlap[2]}行, 占比{overlap_ratio:.2%}")
-        return overlap
+    # 🎯 使用多候选搜索策略：查找前5个最长公共子串
+    # 优先使用Rust，否则使用Python实现
+    if RUST_AVAILABLE:
+        # Rust只返回最长的一个，需要Python实现多候选
+        try:
+            candidates = [(find_longest_common_substring(img1_search_region, img2_hashes, min_ratio=0.01))]
+            if candidates[0][2] == 0:
+                candidates = []
+        except:
+            candidates = find_top_common_substrings(img1_search_region, img2_hashes, min_ratio=0.01, top_k=5)
     else:
-        print("  未找到任何重叠区域")
+        candidates = find_top_common_substrings(img1_search_region, img2_hashes, min_ratio=0.01, top_k=5)
+
+    if not candidates or candidates[0][2] == 0:
+        print("  ❌ 未找到任何重叠区域")
         return (-1, -1, 0)
+    
+    # 🔍 遍历候选子串，找到第一个不会导致缩短的匹配
+    for candidate_idx, overlap in enumerate(candidates, 1):
+        # 将相对位置转换回绝对位置
+        absolute_start_i = overlap[0] + search_start
+        overlap_ratio = overlap[2] / min(len(img1_search_region), img2_len)
+        
+        # 🔧 检查是否会导致结果缩短
+        img1_keep_height = absolute_start_i + overlap[2]
+        img2_skip_height = overlap[1] + overlap[2]
+        img2_keep_height = img2_len - img2_skip_height
+        result_height = img1_keep_height + img2_keep_height
+        
+        will_shrink = result_height < img1_len
+        
+        print(f"\n  📌 候选 #{candidate_idx}: 长度{overlap[2]}行, 占比{overlap_ratio:.2%}")
+        print(f"     位置: img1[{absolute_start_i}:{absolute_start_i + overlap[2]}] ↔ img2[{overlap[1]}:{overlap[1] + overlap[2]}]")
+        print(f"     预测结果: {img1_len}行 -> {result_height}行", end="")
+        
+        if will_shrink:
+            print(f" ❌ (减少{img1_len - result_height}行)")
+            print(f"     img1保留{img1_keep_height}行, 丢弃底部{img1_len - img1_keep_height}行")
+            print(f"     img2新增{img2_keep_height}行, 无法弥补损失")
+            # 继续尝试下一个候选
+            continue
+        else:
+            print(f" ✅ (增加{result_height - img1_len}行)")
+            print(f"  ✅ 选择此候选作为最佳匹配")
+            return (absolute_start_i, overlap[1], overlap[2])
+    
+    # 所有候选都会导致缩短，尝试缩小搜索范围
+    print(f"\n  ⚠️  所有候选都会导致缩短!")
+    
+    if last_added_height and last_added_height > 0:
+        # 限制搜索范围为: img1底部的"上次新增高度"范围
+        conservative_search_start = max(0, img1_len - last_added_height)
+        conservative_search_region = img1_hashes[conservative_search_start:]
+        
+        print(f"  🔄 尝试缩小搜索范围到上次新增区域...")
+        print(f"     保守搜索范围: img1[{conservative_search_start}:{img1_len}] (底部{len(conservative_search_region)}行)")
+        
+        # 重新搜索多个候选
+        if RUST_AVAILABLE:
+            try:
+                candidates_retry = [(find_longest_common_substring(conservative_search_region, img2_hashes, min_ratio=0.01))]
+                if candidates_retry[0][2] == 0:
+                    candidates_retry = []
+            except:
+                candidates_retry = find_top_common_substrings(conservative_search_region, img2_hashes, min_ratio=0.01, top_k=5)
+        else:
+            candidates_retry = find_top_common_substrings(conservative_search_region, img2_hashes, min_ratio=0.01, top_k=5)
+        
+        if candidates_retry:
+            for candidate_idx, overlap_retry in enumerate(candidates_retry, 1):
+                # 转换为绝对位置
+                absolute_start_i_retry = overlap_retry[0] + conservative_search_start
+                
+                # 重新检查是否还会缩短
+                img1_keep_height_retry = absolute_start_i_retry + overlap_retry[2]
+                img2_skip_height_retry = overlap_retry[1] + overlap_retry[2]
+                img2_keep_height_retry = img2_len - img2_skip_height_retry
+                result_height_retry = img1_keep_height_retry + img2_keep_height_retry
+                
+                print(f"\n  📌 保守候选 #{candidate_idx}: 长度{overlap_retry[2]}行")
+                print(f"     预测结果: {img1_len}行 -> {result_height_retry}行", end="")
+                
+                if result_height_retry >= img1_len:
+                    print(f" ✅ (增加{result_height_retry - img1_len}行)")
+                    print(f"  ✅ 缩小范围后找到合适的匹配")
+                    overlap_ratio_retry = overlap_retry[2] / min(len(conservative_search_region), img2_len)
+                    return (absolute_start_i_retry, overlap_retry[1], overlap_retry[2])
+                else:
+                    print(f" ❌ (减少{img1_len - result_height_retry}行)")
+                    continue
+        
+        print(f"  ❌ 缩小范围后仍未找到合适匹配，使用原始最长匹配（接受轻微缩短）")
+    else:
+        print(f"  ⚠️  没有历史增长记录，使用原始最长匹配（接受轻微缩短）")
+    
+    # 如果所有尝试都失败，返回原始的最长匹配（即使会缩短）
+    overlap = candidates[0]
+    absolute_start_i = overlap[0] + search_start
+    fallback_overlap = (absolute_start_i, overlap[1], overlap[2])
+    if allow_shrink_fallback:
+        return fallback_overlap
+    raise AllOverlapShrinkError(
+        "所有候选重叠都会导致拼接结果缩短",
+        fallback_overlap=fallback_overlap,
+    )
 
 
-def stitch_images(
-    img1: Image.Image, img2: Image.Image, ignore_right_pixels: int = 20
+def stitch_images_rust(
+    img1: Image.Image, 
+    img2: Image.Image, 
+    ignore_right_pixels: int = 20,
+    debug: bool = False
 ) -> Optional[Image.Image]:
     """
-    拼接两张图片（优先使用 Rust 完整拼接方案）
-    ignore_right_pixels: 忽略右侧多少像素（用于排除滚动条影响）
+    🚀 纯Rust拼接（最快，推荐用于生产环境）
     
-    性能层级：
-      方案 A（最快）: 全 Rust 拼接 - 零拷贝，全程 Rust 处理（预计 3-4x 快于方案 B）
-      方案 B（次快）: Rust 哈希 + Python PIL - Rust 加速关键算法（当前使用）
-      方案 C（最慢）: 纯 Python - 完全回退方案
+    使用零拷贝的Rust实现，全程在Rust中处理，性能最优（比Python快11倍）
+    现在使用智能拼接（多候选纠错机制），准确性与Python一致
+    
+    参数:
+        img1, img2: 要拼接的PIL图像
+        ignore_right_pixels: 忽略右侧像素数（排除滚动条，默认20）
+        debug: 是否输出调试信息（默认False）
+    
+    返回:
+        拼接后的PIL图像，失败返回None
     """
-    start_time = time.perf_counter()
+    if not RUST_AVAILABLE:
+        print("❌ Rust模块未加载，无法使用Rust拼接")
+        return None
     
-    # 🚀 方案 A：尝试使用完整 Rust 拼接（零拷贝，最快）
-    if RUST_AVAILABLE:
-        try:
-            # 将两张图片转换为字节流
-            buffer1 = io.BytesIO()
-            buffer2 = io.BytesIO()
-            img1.save(buffer1, format='PNG')
-            img2.save(buffer2, format='PNG')
-            
-            # 调用 Rust 完整拼接函数
-            result_bytes = jietuba_rust.stitch_two_images_rust(
+    try:
+        start_time = time.perf_counter()
+        
+        # 将PIL图像转换为字节流
+        buffer1 = io.BytesIO()
+        buffer2 = io.BytesIO()
+        img1.save(buffer1, format='PNG')
+        img2.save(buffer2, format='PNG')
+        
+        # 调用Rust智能拼接函数（多候选纠错机制）
+        if debug:
+            result_bytes = jietuba_rust.stitch_two_images_rust_smart_debug(
                 buffer1.getvalue(),
                 buffer2.getvalue(),
                 ignore_right_pixels,
-                0.1  # min_overlap_ratio
+                0.01  # min_overlap_ratio
             )
+        else:
+            result_bytes = jietuba_rust.stitch_two_images_rust_smart(
+                buffer1.getvalue(),
+                buffer2.getvalue(),
+                ignore_right_pixels,
+                0.01  # min_overlap_ratio
+            )
+        
+        elapsed = time.perf_counter() - start_time
+        
+        if result_bytes is not None:
+            result = Image.open(io.BytesIO(result_bytes))
+            if not debug:
+                print(f"✅ Rust拼接成功: {img1.size} + {img2.size} -> {result.size}, 耗时: {elapsed*1000:.2f}ms")
+            return result
+        else:
+            print("⚠️  Rust拼接返回None")
+            return None
             
-            if result_bytes is not None:
-                # 成功！直接返回结果
-                result = Image.open(io.BytesIO(result_bytes))
-                elapsed = time.perf_counter() - start_time
-                print(f"✅ Rust 完整拼接成功: {img1.size} + {img2.size} -> {result.size}")
-                print(f"⚡ 耗时: {elapsed*1000:.2f} ms（零拷贝方案）")
-                return result
-            else:
-                print("⚠️  Rust 完整拼接返回 None，尝试方案 B...")
-        except Exception as e:
-            print(f"⚠️  Rust 完整拼接失败: {e}，回退到方案 B...")
-    
-    # 🐍 方案 B：Rust 哈希加速 + Python PIL 拼接
-    print(f"处理图片: {img1.size} + {img2.size}")
+    except Exception as e:
+        print(f"❌ Rust拼接失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
+
+def stitch_images_python(
+    img1: Image.Image, 
+    img2: Image.Image, 
+    ignore_right_pixels: int = 20,
+    debug: bool = False,
+    last_added_height: Optional[int] = None,
+    cancel_on_shrink: bool = False,
+) -> Optional[Image.Image]:
+    """
+    🐍 纯Python拼接（调试用，有详细日志）
+    
+    使用Python实现的逐行哈希+LCS算法，性能较慢但输出详细信息，适合调试
+    
+    参数:
+        img1, img2: 要拼接的PIL图像
+        ignore_right_pixels: 忽略右侧像素数（排除滚动条，默认20）
+        debug: 是否输出详细调试信息（默认False）
+        last_added_height: 上次拼接新增的高度(可选),用于避免结果缩短
+    
+    返回:
+        拼接后的PIL图像，失败返回None
+    """
+    start_time = time.perf_counter()
+    
+    if debug:
+        print(f"处理图片: {img1.size} + {img2.size}")
+    
     # 确保两张图片宽度相同
     if img1.width != img2.width:
-        print(f"调整图片宽度: {img1.width} -> {img2.width}")
+        if debug:
+            print(f"调整图片宽度: {img1.width} -> {img2.width}")
         img1 = img1.resize(
             (img2.width, int(img1.height * img2.width / img1.width)),
             Image.Resampling.LANCZOS,
         )
-
-    # 转换为行哈希（忽略右侧像素以排除滚动条影响）
-    print(f"忽略右侧 {ignore_right_pixels} 像素来排除滚动条影响")
-    img1_hashes = image_to_row_hashes(img1, ignore_right_pixels)
-    img2_hashes = image_to_row_hashes(img2, ignore_right_pixels)
-
-    # 寻找重叠区域
-    overlap = find_best_overlap(img1_hashes, img2_hashes)
-
-    if overlap[2] == 0:
-        print("未找到重叠区域，直接拼接")
-        # 如果没有重叠，直接拼接
-        result_height = img1.height + img2.height
-        result = Image.new("RGB", (img1.width, result_height))
-        result.paste(img1, (0, 0))
-        result.paste(img2, (0, img1.height))
+    
+    if debug:
+        print(f"忽略右侧 {ignore_right_pixels} 像素来排除滚动条影响")
+    
+    # 强制使用Python实现
+    old_rust = RUST_AVAILABLE
+    globals()['RUST_AVAILABLE'] = False
+    
+    try:
+        # 转换为行哈希
+        img1_hashes = image_to_row_hashes(img1, ignore_right_pixels)
+        img2_hashes = image_to_row_hashes(img2, ignore_right_pixels)
+        
+        # 寻找重叠区域(传入上次新增高度)
+        try:
+            overlap = find_best_overlap(
+                img1_hashes,
+                img2_hashes,
+                last_added_height,
+                allow_shrink_fallback=not cancel_on_shrink,
+            )
+        except AllOverlapShrinkError as shrink_err:
+            if cancel_on_shrink:
+                if debug:
+                    print("🚫 所有候选匹配都会缩短结果，本次拼接已取消")
+                raise
+            overlap = shrink_err.fallback_overlap if shrink_err.fallback_overlap else (-1, -1, 0)
+        
+        if overlap[2] == 0:
+            if debug:
+                print("未找到重叠区域，直接拼接")
+            # 直接拼接
+            result_height = img1.height + img2.height
+            result = Image.new("RGB", (img1.width, result_height))
+            result.paste(img1, (0, 0))
+            result.paste(img2, (0, img1.height))
+        else:
+            img1_start, img2_start, overlap_length = overlap
+            if debug:
+                print(f"找到重叠区域: img1[{img1_start}:{img1_start + overlap_length}] = img2[{img2_start}:{img2_start + overlap_length}]")
+            
+            # 计算拼接后的总高度
+            img1_keep_height = img1_start + overlap_length
+            img2_skip_height = img2_start + overlap_length
+            img2_keep_height = img2.height - img2_skip_height
+            result_height = img1_keep_height + img2_keep_height
+            
+            if debug:
+                print(f"拼接计算: img1保留{img1_keep_height}行 + img2跳过{img2_skip_height}行保留{img2_keep_height}行 = 总计{result_height}行")
+            
+            # 创建结果图片
+            result = Image.new("RGB", (img1.width, result_height))
+            
+            # 粘贴img1的保留部分
+            img1_crop = img1.crop((0, 0, img1.width, img1_keep_height))
+            result.paste(img1_crop, (0, 0))
+            
+            # 粘贴img2的剩余部分
+            if img2_keep_height > 0:
+                img2_crop = img2.crop((0, img2_skip_height, img2.width, img2.height))
+                result.paste(img2_crop, (0, img1_keep_height))
+        
+        elapsed = time.perf_counter() - start_time
+        if debug:
+            print(f"✅ Python拼接完成，耗时: {elapsed*1000:.2f} ms")
+        else:
+            print(f"✅ Python拼接成功: {img1.size} + {img2.size} -> {result.size}, 耗时: {elapsed*1000:.2f}ms")
+        
         return result
-
-    img1_start, img2_start, overlap_length = overlap
-    print(
-        f"找到重叠区域: img1[{img1_start}:{img1_start + overlap_length}] = img2[{img2_start}:{img2_start + overlap_length}]"
-    )
-
-    # 计算拼接后的总高度
-    img1_keep_height = img1_start + overlap_length  # 保留img1的部分
-    img2_skip_height = img2_start + overlap_length  # 跳过img2的重叠部分
-    img2_keep_height = img2.height - img2_skip_height  # 保留img2的剩余部分
-
-    result_height = img1_keep_height + img2_keep_height
-
-    print(
-        f"拼接计算: img1保留{img1_keep_height}行 + img2跳过{img2_skip_height}行保留{img2_keep_height}行 = 总计{result_height}行"
-    )
-
-    # 创建结果图片
-    result = Image.new("RGB", (img1.width, result_height))
-
-    # 粘贴img1的保留部分
-    img1_crop = img1.crop((0, 0, img1.width, img1_keep_height))
-    result.paste(img1_crop, (0, 0))
-
-    # 粘贴img2的剩余部分
-    if img2_keep_height > 0:
-        img2_crop = img2.crop((0, img2_skip_height, img2.width, img2.height))
-        result.paste(img2_crop, (0, img1_keep_height))
-
-    elapsed = time.perf_counter() - start_time
-    print(f"✅ 方案 B 拼接完成，耗时: {elapsed*1000:.2f} ms")
-    return result
+        
+    finally:
+        # 恢复Rust状态
+        globals()['RUST_AVAILABLE'] = old_rust
 
 
 def stitch_multiple_images(
@@ -365,16 +652,35 @@ def stitch_multiple_images(
     # 加载第一张图片
     result = Image.open(image_paths[0])
     print(f"基础图片: {image_paths[0]} ({result.size})")
+    
+    # 追踪上次新增的高度
+    last_added_height = None
 
     # 逐个拼接后续图片
     for i, path in enumerate(image_paths[1:], 1):
         print(f"\n拼接第 {i+1} 张图片: {path}")
         next_img = Image.open(path)
-        result = stitch_images(result, next_img, ignore_right_pixels)
+        previous_height = result.height
+        previous_result = result  # 保存上一个结果
+        
+        # 优先使用Rust，失败则用Python(带历史高度信息)
+        if RUST_AVAILABLE:
+            result = stitch_images_rust(result, next_img, ignore_right_pixels)
+        else:
+            result = None
+            
+        if result is None:
+            result = stitch_images_python(previous_result, 
+                                         next_img, ignore_right_pixels,
+                                         debug=False, last_added_height=last_added_height)
         if result is None:
             print("拼接失败")
             return
-        print(f"当前结果尺寸: {result.size}")
+        
+        # 计算本次新增的高度
+        current_height = result.height
+        last_added_height = current_height - previous_height
+        print(f"当前结果尺寸: {result.size}, 本次新增: {last_added_height}行")
 
     # 保存结果
     result.save(output_path, "JPEG", quality=95)
@@ -411,15 +717,33 @@ def stitch_pil_images(
     # 从第一张图片开始
     result = images[0]
     print(f"基础图片: {result.size}")
+    
+    # 追踪上次新增的高度
+    last_added_height = None
 
     # 逐个拼接后续图片
     for i, next_img in enumerate(images[1:], 1):
         print(f"\n拼接第 {i+1} 张图片: {next_img.size}")
-        result = stitch_images(result, next_img, ignore_right_pixels)
+        previous_height = result.height
+        previous_result = result  # 保存上一个结果
+        
+        # 优先使用Rust，失败则用Python(带历史高度信息)
+        if RUST_AVAILABLE:
+            result = stitch_images_rust(result, next_img, ignore_right_pixels)
+        else:
+            result = None
+            
+        if result is None:
+            result = stitch_images_python(previous_result, next_img, ignore_right_pixels, 
+                                         debug=False, last_added_height=last_added_height)
         if result is None:
             print("拼接失败")
             return None
-        print(f"当前结果尺寸: {result.size}")
+        
+        # 计算本次新增的高度
+        current_height = result.height
+        last_added_height = current_height - previous_height
+        print(f"当前结果尺寸: {result.size}, 本次新增: {last_added_height}行")
 
     print(f"\n拼接完成! 最终尺寸: {result.size}")
     

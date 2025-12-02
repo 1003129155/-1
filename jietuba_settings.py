@@ -1,807 +1,698 @@
-"""
-设置界面模块
-左侧导航 + 右侧内容的现代化设置界面
-"""
-
+import sys
+import os
+import platform
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget,
-    QGroupBox, QCheckBox, QComboBox, QLineEdit, QFormLayout,
-    QFrame, QSpinBox, QDoubleSpinBox, QGridLayout, QScrollArea
+    QFrame, QSpinBox, QDoubleSpinBox, QGridLayout, QScrollArea,
+    QLineEdit, QComboBox, QFileDialog, QMessageBox, QApplication
 )
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtGui import QColor, QPainter, QFont, QPen
 
+# ==========================================
+# 1. UI 组件库 (仿微信/iOS 风格)
+# ==========================================
+
+class ToggleSwitch(QWidget):
+    """自定义仿iOS/微信风格开关"""
+    def __init__(self, parent=None, width=44, height=24, bg_color="#E5E5E5", active_color="#07C160"):
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self.setCursor(Qt.PointingHandCursor)
+        self._bg_color = bg_color
+        self._circle_color = "#FFFFFF"
+        self._active_color = active_color
+        self._circle_position = 3
+        self._checked = False
+        self.stateChanged = None # 模拟信号
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, checked):
+        self._checked = checked
+        if checked:
+            self._circle_position = self.width() - 21
+        else:
+            self._circle_position = 3
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 绘制背景
+        color = self._active_color if self._checked else self._bg_color
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.NoPen)
+        rect = self.rect()
+        painter.drawRoundedRect(0, 0, rect.width(), rect.height(), rect.height() / 2, rect.height() / 2)
+
+        # 绘制圆圈
+        painter.setBrush(QColor(self._circle_color))
+        painter.drawEllipse(self._circle_position, 3, 18, 18)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        self._checked = not self._checked
+        # 动画
+        self.anim = QPropertyAnimation(self, b"circle_position")
+        self.anim.setDuration(200)
+        self.anim.setEasingCurve(QEasingCurve.OutQuad)
+        self.anim.setEndValue(self.width() - 21 if self._checked else 3)
+        self.anim.start()
+        
+        if self.stateChanged:
+            self.stateChanged(self._checked)
+        self.update()
+
+    @pyqtProperty(int)
+    def circle_position(self):
+        return self._circle_position
+
+    @circle_position.setter
+    def circle_position(self, pos):
+        self._circle_position = pos
+        self.update()
+
+class SettingCard(QFrame):
+    """白底圆角卡片容器"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+        self.setStyleSheet("""
+            #Card {
+                background-color: #FFFFFF;
+                border-radius: 8px;
+                border: 1px solid #E5E5E5;
+            }
+        """)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(15)
+
+class HLine(QFrame):
+    """分割线"""
+    def __init__(self):
+        super().__init__()
+        self.setFrameShape(QFrame.HLine)
+        self.setFrameShadow(QFrame.Sunken)
+        self.setStyleSheet("background-color: #F0F0F0; border: none; max-height: 1px;")
+
+# ==========================================
+# 2. 设置对话框主逻辑
+# ==========================================
 
 class SettingsDialog(QDialog):
-    """现代化设置对话框 - 左侧导航+右侧内容布局"""
+    """现代化设置对话框 - 微信PC版风格"""
 
     def __init__(self, config_manager, current_hotkey="ctrl+shift+a", parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.current_hotkey = current_hotkey
+        self.main_window = parent
+        
         self.setWindowTitle("設定")
-        self.setModal(True)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.resize(800, 550)
+        self.resize(850, 600)
+        self.setFont(QFont("Microsoft YaHei", 9)) # 使用微软雅黑
+        # 全局背景色
+        self.setStyleSheet("""
+            QDialog { background-color: #F5F5F5; color: #333333; }
+            QLabel { color: #333333; }
+            QScrollArea { background-color: transparent; border: none; }
+            QScrollBar:vertical {
+                border: none; background: transparent; width: 6px; margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #CCCCCC; min-height: 20px; border-radius: 3px;
+            }
+        """)
+        
         self._setup_ui()
 
     def _setup_ui(self):
-        """设置主界面"""
-        main_layout = QHBoxLayout()
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 左侧导航栏
+        # 1. 左侧导航栏
         self.nav_list = self._create_navigation()
         main_layout.addWidget(self.nav_list)
 
-        # 添加分隔线
-        separator = QFrame()
-        separator.setFrameShape(QFrame.VLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: #ddd;")
-        main_layout.addWidget(separator)
-
-        # 右侧内容区
-        right_layout = QVBoxLayout()
-        right_layout.setContentsMargins(20, 20, 20, 20)
+        # 2. 右侧内容区 (ScrollArea 包裹，防止小屏幕显示不全)
+        right_area = QWidget()
+        right_area.setStyleSheet("background-color: #F5F5F5;")
+        right_layout = QVBoxLayout(right_area)
+        right_layout.setContentsMargins(30, 20, 30, 20)
         right_layout.setSpacing(15)
 
-        # 标题区域
+        # 标题栏
         self.content_title = QLabel("ショートカット設定")
-        self.content_title.setStyleSheet("""
-            font-weight: bold;
-            font-size: 16pt;
-            color: #2c3e50;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #4CAF50;
-        """)
+        self.content_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
         right_layout.addWidget(self.content_title)
 
         # 内容堆栈
         self.content_stack = QStackedWidget()
-        self.content_stack.addWidget(self._create_hotkey_page())
-        self.content_stack.addWidget(self._create_long_screenshot_page())
-        self.content_stack.addWidget(self._create_smart_selection_page())
+        self.content_stack.addWidget(self._create_hotkey_page())         # 0
+        self.content_stack.addWidget(self._create_long_screenshot_page())# 1
+        self.content_stack.addWidget(self._create_smart_selection_page())# 2
+        self.content_stack.addWidget(self._create_log_page())            # 3
         right_layout.addWidget(self.content_stack)
-
+        
+        # 底部按钮栏
         right_layout.addStretch()
+        right_layout.addLayout(self._create_button_area())
 
-        # 底部按钮区域
-        btn_layout = self._create_button_area()
-        right_layout.addLayout(btn_layout)
+        main_layout.addWidget(right_area, 1)
 
-        right_container = QWidget()
-        right_container.setLayout(right_layout)
-        main_layout.addWidget(right_container, 1)
-
-        self.setLayout(main_layout)
-
-        # 连接导航切换事件
+        # 导航连接
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         self.nav_list.setCurrentRow(0)
 
     def _create_navigation(self):
-        """创建左侧导航栏"""
+        """创建左侧导航栏 - 灰色极简风格"""
         nav_list = QListWidget()
-        nav_list.setFixedWidth(220)
-        nav_list.setSpacing(5)
-        
-        # 设置导航样式
+        nav_list.setFixedWidth(180)
+        nav_list.setFocusPolicy(Qt.NoFocus)
         nav_list.setStyleSheet("""
             QListWidget {
-                background-color: #f5f5f5;
+                background-color: #F0F0F0;
                 border: none;
+                border-right: 1px solid #E5E5E5;
+                padding-top: 20px;
                 outline: none;
-                padding: 10px 5px;
             }
             QListWidget::item {
-                background-color: transparent;
-                color: #333;
-                padding: 15px 20px;
-                border-radius: 6px;
-                margin: 2px 5px;
-                font-size: 11pt;
+                height: 40px;
+                margin: 2px 10px;
+                border-radius: 4px;
+                color: #333333;
+                font-size: 14px;
+                padding-left: 10px;
             }
             QListWidget::item:hover {
-                background-color: #e0e0e0;
+                background-color: #E0E0E0;
             }
             QListWidget::item:selected {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
+                background-color: #D6D6D6;
+                color: #000000;
             }
         """)
 
-        # 添加导航项
         items = [
-            "⌨️ ショートカット設定",
-            "📸 長いスクリーンショット設定",
-            "🎯 スマート選択設定"
+            "⌨️  ショートカット",
+            "📸  長いスクショ",
+            "🎯  スマート選択",
+            "📝  ログ設定"
         ]
-        
-        for item_text in items:
-            item = QListWidgetItem(item_text)
-            item.setSizeHint(QSize(200, 50))
-            nav_list.addItem(item)
-
+        for t in items:
+            nav_list.addItem(t)
         return nav_list
 
+    # ================= 辅助方法 =================
+    
+    def _create_toggle_row(self, title, desc, checked_state, toggle_obj):
+        """创建一个标准的一行设置：左字右开关"""
+        row = QHBoxLayout()
+        
+        text_layout = QVBoxLayout()
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 14px; color: #000;")
+        text_layout.addWidget(lbl_title)
+        
+        if desc:
+            lbl_desc = QLabel(desc)
+            lbl_desc.setStyleSheet("font-size: 12px; color: #888;")
+            text_layout.addWidget(lbl_desc)
+            
+        row.addLayout(text_layout)
+        row.addStretch()
+        
+        toggle_obj.setChecked(checked_state)
+        row.addWidget(toggle_obj)
+        return row
+
+    def _get_input_style(self):
+        return """
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                border: 1px solid #E5E5E5;
+                border-radius: 4px;
+                padding: 4px 8px;
+                background-color: #FAFAFA;
+                color: #333;
+            }
+            QLineEdit:focus, QSpinBox:focus {
+                border: 1px solid #07C160;
+                background-color: #FFF;
+            }
+        """
+
+    # ================= 页面创建 =================
+
     def _create_hotkey_page(self):
-        """创建快捷键设置页面"""
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(20)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(15)
 
-        # 说明文字
-        desc_label = QLabel("スクリーンショットを起動するためのグローバルホットキーを設定します。")
-        desc_label.setStyleSheet("color: #666; font-size: 10pt; margin-bottom: 10px;")
-        layout.addWidget(desc_label)
-
-        # 快捷键输入组
-        hotkey_group = QGroupBox("ホットキー")
-        hotkey_group.setStyleSheet(self._get_group_style())
+        # 卡片1: 快捷键
+        card1 = SettingCard()
         
-        group_layout = QFormLayout()
-        group_layout.setSpacing(15)
-        
+        # 快捷键输入
+        row1 = QHBoxLayout()
+        lbl = QLabel("ホットキー")
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setText(self.current_hotkey)
         self.hotkey_input.setPlaceholderText("例: ctrl+shift+a")
+        self.hotkey_input.setFixedWidth(200)
         self.hotkey_input.setStyleSheet(self._get_input_style())
         
-        group_layout.addRow("ホットキー:", self.hotkey_input)
-        hotkey_group.setLayout(group_layout)
-        layout.addWidget(hotkey_group)
+        row1.addWidget(lbl)
+        row1.addStretch()
+        row1.addWidget(self.hotkey_input)
+        
+        card1.layout.addLayout(row1)
+        card1.layout.addWidget(HLine())
 
-        # 任务栏按钮设置组
-        taskbar_group = QGroupBox("スクショボタン")
-        taskbar_group.setStyleSheet(self._get_group_style())
-        
-        taskbar_layout = QVBoxLayout()
-        taskbar_layout.setSpacing(10)
-        
-        self.taskbar_button_checkbox = QCheckBox("スクショボタンを表示")
-        self.taskbar_button_checkbox.setChecked(self.config_manager.get_taskbar_button())
-        self.taskbar_button_checkbox.setStyleSheet(self._get_checkbox_style())
-
-        taskbar_desc = QLabel("スクショボタンを表示します。")
-        taskbar_desc.setStyleSheet("color: #666; font-size: 9pt; margin-left: 25px;")
-        
-        taskbar_layout.addWidget(self.taskbar_button_checkbox)
-        taskbar_layout.addWidget(taskbar_desc)
-        
-        taskbar_group.setLayout(taskbar_layout)
-        layout.addWidget(taskbar_group)
-
-        # 使用说明
-        hint_label = QLabel(
-            "💡 ヒント:\n"
-            "• Ctrl、Shift、Altなどの修飾キーと組み合わせて使用できます（手入力）\n"
-            "• 例: ctrl+shift+a, alt+q, ctrl+alt+s\n"
-            "• 他のアプリケーションと競合しないキーの組み合わせを選択してください"
+        # 任务栏按钮
+        self.taskbar_toggle = ToggleSwitch()
+        row2 = self._create_toggle_row(
+            "スクショボタン", 
+            "タスクバーにスクショボタンを表示します。", 
+            self.config_manager.get_taskbar_button(), 
+            self.taskbar_toggle
         )
-        hint_label.setStyleSheet("""
-            background-color: #e3f2fd;
-            color: #1976d2;
-            padding: 15px;
-            border-radius: 6px;
-            border-left: 4px solid #2196F3;
-            font-size: 9pt;
-            line-height: 1.6;
-        """)
-        layout.addWidget(hint_label)
+        card1.layout.addLayout(row2)
+        
+        layout.addWidget(card1)
 
+        # 提示卡片
+        hint_lbl = QLabel("💡 ヒント: Ctrl, Shift, Alt などの修飾キーと組み合わせて使用できます。")
+        hint_lbl.setStyleSheet("color: #888; padding: 5px;")
+        layout.addWidget(hint_lbl)
+        
         layout.addStretch()
         return page
 
     def _create_long_screenshot_page(self):
-        """创建长截图设置页面"""
-        page = QWidget()
-        main_layout = QVBoxLayout(page)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        # 使用 ScrollArea 因为这个页面很长
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         
-        # 创建滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background-color: #f5f5f5;
-                width: 10px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #c0c0c0;
-                border-radius: 5px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #a0a0a0;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
-        
-        # 创建内容容器
-        content_widget = QWidget()
-        layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(0, 10, 10, 10)
-        layout.setSpacing(20)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 10, 0) # 右侧留点空隙给滚动条
+        layout.setSpacing(15)
 
-        # 说明文字
-        desc_label = QLabel("スクロールして連続撮影する長いスクリーンショットの設定を行います。")
-        desc_label.setStyleSheet("color: #666; font-size: 10pt; margin-bottom: 10px;")
-        layout.addWidget(desc_label)
-
-        # 拼接引擎设置组
-        engine_group = QGroupBox("拼接エンジン")
-        engine_group.setStyleSheet(self._get_group_style())
+        # 卡片1: 基础引擎设置
+        card1 = SettingCard()
         
-        group_layout = QVBoxLayout()
-        group_layout.setSpacing(15)
-        
-        engine_label = QLabel("マッチングの方法を選択:")
-        engine_label.setStyleSheet("color: #333; font-size: 10pt; font-weight: bold;")
-        group_layout.addWidget(engine_label)
-        
+        # 引擎选择
+        row_engine = QHBoxLayout()
+        lbl_eng = QLabel("拼接エンジン")
         self.engine_combo = QComboBox()
-        self.engine_combo.addItem("🔄 自動選択 (推奨)", "auto")
-        self.engine_combo.addItem("⚡ ピクセル特徴", "rust")
-        self.engine_combo.addItem("🐍 画像ハッシュ値", "rust/python")
+        self.engine_combo.addItems(["Rustハッシュ値 (推奨)", "Pythonハッシュ値 (デバッグ用)"])
+        # 数据映射 (0 -> hash_rust, 1 -> hash_python)
+        self.engine_combo.setItemData(0, "hash_rust")
+        self.engine_combo.setItemData(1, "hash_python")
+        self.engine_combo.setFixedWidth(200)
+        self.engine_combo.setStyleSheet(self._get_input_style())
         
-        # 设置当前选中的引擎
-        current_engine = self.config_manager.get_long_stitch_engine()
-        for i in range(self.engine_combo.count()):
-            if self.engine_combo.itemData(i) == current_engine:
-                self.engine_combo.setCurrentIndex(i)
-                break
-        
-        self.engine_combo.setStyleSheet(self._get_combo_style())
-        group_layout.addWidget(self.engine_combo)
-        
-        # 引擎说明
-        engine_desc = QLabel(
-            "• 自動選択: 画像の特徴に応じて最適なエンジンを自動選択します\n"
-            "• ピクセル特徴: 特徴点マッチングを使用し、高速処理が可能です\n"
-            "• 画像ハッシュ値: ハッシュ値によるマッチングで、より安定した結果を提供します"
-        )
-        engine_desc.setStyleSheet("color: #666; font-size: 9pt; margin-top: 10px;")
-        group_layout.addWidget(engine_desc)
-        
-        engine_group.setLayout(group_layout)
-        layout.addWidget(engine_group)
+        # 恢复选中状态
+        current_eng = self.config_manager.get_long_stitch_engine()
+        if current_eng == "hash_python":
+            self.engine_combo.setCurrentIndex(1)
+        else:
+            self.engine_combo.setCurrentIndex(0) # Default hash_rust
 
-        # Rust 引擎高级参数设置组
-        rust_params_group = QGroupBox("マーチングパラメータ")
-        rust_params_group.setStyleSheet(self._get_group_style())
+        row_engine.addWidget(lbl_eng)
+        row_engine.addStretch()
+        row_engine.addWidget(self.engine_combo)
+        card1.layout.addLayout(row_engine)
         
-        rust_params_layout = QGridLayout()
-        rust_params_layout.setSpacing(12)
-        rust_params_layout.setColumnStretch(0, 1)  # 标签列可伸缩
-        rust_params_layout.setColumnStretch(1, 0)  # 输入框列固定宽度
-        
-        # 采样率
-        sample_rate_label = QLabel("采样率 (sample_rate):")
-        sample_rate_label.setToolTip("控制图片缩放比例，越高精度越高但速度越慢 (0.0-1.0)")
-        self.sample_rate_input = QDoubleSpinBox()
-        self.sample_rate_input.setRange(0.1, 1.0)
-        self.sample_rate_input.setSingleStep(0.1)
-        self.sample_rate_input.setDecimals(1)
-        self.sample_rate_input.setFixedWidth(120)
-        self.sample_rate_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_sample_rate', 0.6, type=float)
+        card1.layout.addWidget(HLine())
+
+        # 调试日志
+        self.debug_toggle = ToggleSwitch()
+        row_debug = self._create_toggle_row(
+            "詳細ログ", 
+            "debug用",
+            self.config_manager.get_long_stitch_debug(), 
+            self.debug_toggle
         )
-        rust_params_layout.addWidget(sample_rate_label, 0, 0)
-        rust_params_layout.addWidget(self.sample_rate_input, 0, 1)
+        card1.layout.addLayout(row_debug)
         
-        # 最小采样尺寸
-        min_sample_label = QLabel("最小采样尺寸:")
-        min_sample_label.setToolTip("采样后图片的最小尺寸 (像素)")
-        self.min_sample_size_input = QSpinBox()
-        self.min_sample_size_input.setRange(100, 1000)
-        self.min_sample_size_input.setSingleStep(50)
-        self.min_sample_size_input.setFixedWidth(120)
-        self.min_sample_size_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_min_sample_size', 300, type=int)
+        card1.layout.addWidget(HLine())
+
+        # 滚动冷却时间
+        row_cooldown = QHBoxLayout()
+        lbl_cooldown = QLabel("待機時間")
+        lbl_cooldown_desc = QLabel("スクロール後のキャプチャ待機時間 (秒)")
+        lbl_cooldown_desc.setStyleSheet("font-size: 12px; color: #888;")
+        
+        self.cooldown_spinbox = QDoubleSpinBox()
+        self.cooldown_spinbox.setRange(0.05, 1.0)
+        self.cooldown_spinbox.setSingleStep(0.01)
+        self.cooldown_spinbox.setDecimals(2)
+        self.cooldown_spinbox.setValue(
+            self.config_manager.settings.value('screenshot/scroll_cooldown', 0.17, type=float)
         )
-        rust_params_layout.addWidget(min_sample_label, 1, 0)
-        rust_params_layout.addWidget(self.min_sample_size_input, 1, 1)
+        self.cooldown_spinbox.setFixedWidth(100)
+        self.cooldown_spinbox.setStyleSheet(self._get_input_style())
         
-        # 最大采样尺寸
-        max_sample_label = QLabel("最大采样尺寸:")
-        max_sample_label.setToolTip("采样后图片的最大尺寸 (像素)")
-        self.max_sample_size_input = QSpinBox()
-        self.max_sample_size_input.setRange(400, 2000)
-        self.max_sample_size_input.setSingleStep(100)
-        self.max_sample_size_input.setFixedWidth(120)
-        self.max_sample_size_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_max_sample_size', 800, type=int)
-        )
-        rust_params_layout.addWidget(max_sample_label, 2, 0)
-        rust_params_layout.addWidget(self.max_sample_size_input, 2, 1)
+        cooldown_text_layout = QVBoxLayout()
+        cooldown_text_layout.addWidget(lbl_cooldown)
+        cooldown_text_layout.addWidget(lbl_cooldown_desc)
         
-        # 特征点阈值
-        corner_threshold_label = QLabel("特征点阈值 (corner_threshold):")
-        corner_threshold_label.setToolTip("越低检测越多特征点，推荐10-64")
-        self.corner_threshold_input = QSpinBox()
-        self.corner_threshold_input.setRange(5, 128)
-        self.corner_threshold_input.setSingleStep(5)
-        self.corner_threshold_input.setFixedWidth(120)
-        self.corner_threshold_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_corner_threshold', 30, type=int)
-        )
-        rust_params_layout.addWidget(corner_threshold_label, 3, 0)
-        rust_params_layout.addWidget(self.corner_threshold_input, 3, 1)
+        row_cooldown.addLayout(cooldown_text_layout)
+        row_cooldown.addStretch()
+        row_cooldown.addWidget(self.cooldown_spinbox)
         
-        # 描述符块大小
-        descriptor_label = QLabel("描述符块大小:")
-        descriptor_label.setToolTip("特征描述符的块大小 (像素)，推荐9或11")
-        self.descriptor_patch_size_input = QSpinBox()
-        self.descriptor_patch_size_input.setRange(5, 15)
-        self.descriptor_patch_size_input.setSingleStep(2)
-        self.descriptor_patch_size_input.setFixedWidth(120)
-        self.descriptor_patch_size_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_descriptor_patch_size', 9, type=int)
-        )
-        rust_params_layout.addWidget(descriptor_label, 4, 0)
-        rust_params_layout.addWidget(self.descriptor_patch_size_input, 4, 1)
+        card1.layout.addLayout(row_cooldown)
+        layout.addWidget(card1)
+
+        # 卡片2: Rust 高级参数 (已隐藏，保留变量以供内部使用)
+        # 初始化 spinboxes 和 rollback_toggle，使用默认值
+        self.spinboxes = {}
+        params = [
+            ("采样率 (0.1-1.0)", "rust_sample_rate", 0.6, float),
+            ("最小采样尺寸", "rust_min_sample_size", 300, int),
+            ("最大采样尺寸", "rust_max_sample_size", 800, int),
+            ("特征点阈值", "rust_corner_threshold", 30, int),
+            ("描述符块大小", "rust_descriptor_patch_size", 9, int),
+            ("索引重建阈值", "rust_min_size_delta", 1, int),
+            ("距离阈值", "rust_distance_threshold", 0.1, float),
+            ("HNSW搜索参数", "rust_ef_search", 32, int),
+        ]
         
-        # 索引重建阈值
-        min_size_delta_label = QLabel("索引重建阈值:")
-        min_size_delta_label.setToolTip("最小变化量阈值 (像素)，设为1强制每张都更新")
-        self.min_size_delta_input = QSpinBox()
-        self.min_size_delta_input.setRange(1, 128)
-        self.min_size_delta_input.setSingleStep(1)
-        self.min_size_delta_input.setFixedWidth(120)
-        self.min_size_delta_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_min_size_delta', 1, type=int)
-        )
-        rust_params_layout.addWidget(min_size_delta_label, 5, 0)
-        rust_params_layout.addWidget(self.min_size_delta_input, 5, 1)
+        # 创建隐藏的spinbox占位符（保存功能仍需要这些引用）
+        for label_text, key, default, type_ in params:
+            class DummySpinBox:
+                def __init__(self, val):
+                    self._val = val
+                def value(self):
+                    return self._val
+            
+            val = self.config_manager.settings.value(f'screenshot/{key}', default, type=type_)
+            self.spinboxes[key] = DummySpinBox(val)
         
-        # 回滚匹配
-        self.try_rollback_checkbox = QCheckBox("启用回滚匹配 (try_rollback)")
-        self.try_rollback_checkbox.setToolTip("允许在另一个队列中查找匹配")
-        self.try_rollback_checkbox.setChecked(
+        # 创建隐藏的rollback_toggle占位符
+        class DummyToggle:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+        
+        self.rollback_toggle = DummyToggle(
             self.config_manager.settings.value('screenshot/rust_try_rollback', True, type=bool)
         )
-        self.try_rollback_checkbox.setStyleSheet(self._get_checkbox_style())
-        rust_params_layout.addWidget(self.try_rollback_checkbox, 6, 0, 1, 2)
         
-        # 距离阈值
-        distance_threshold_label = QLabel("距离阈值 (distance_threshold):")
-        distance_threshold_label.setToolTip("特征匹配距离阈值，越低越严格 (0.05-0.3)")
-        self.distance_threshold_input = QDoubleSpinBox()
-        self.distance_threshold_input.setRange(0.05, 0.5)
-        self.distance_threshold_input.setSingleStep(0.05)
-        self.distance_threshold_input.setDecimals(2)
-        self.distance_threshold_input.setFixedWidth(120)
-        self.distance_threshold_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_distance_threshold', 0.1, type=float)
-        )
-        rust_params_layout.addWidget(distance_threshold_label, 7, 0)
-        rust_params_layout.addWidget(self.distance_threshold_input, 7, 1)
-        
-        # HNSW 搜索参数
-        ef_search_label = QLabel("HNSW搜索参数 (ef_search):")
-        ef_search_label.setToolTip("HNSW搜索参数，越高准确率越高但速度越慢 (16-128)")
-        self.ef_search_input = QSpinBox()
-        self.ef_search_input.setRange(16, 128)
-        self.ef_search_input.setSingleStep(8)
-        self.ef_search_input.setFixedWidth(120)
-        self.ef_search_input.setValue(
-            self.config_manager.settings.value('screenshot/rust_ef_search', 32, type=int)
-        )
-        rust_params_layout.addWidget(ef_search_label, 8, 0)
-        rust_params_layout.addWidget(self.ef_search_input, 8, 1)
-        
-        # 参数说明
-        params_desc = QLabel(
-            "💡 これらのパラメータはピクセル特徴の計算に影響します。\n"
-            "   スティッチングが失敗する場合は、以下をお試しください：\n"
-            "   • corner_threshold を下げる (10-20) - より多くの特徴点を検出\n"
-            "   • sample_rate を上げる (0.7-0.9) - より多くの詳細を保持\n"
-            "   • distance_threshold を上げる (0.15-0.2) - マッチング条件を緩和\n"
-            "   • ef_search を上げる (48-64) - 検索精度を向上\n"
-            "   • ロールバックマッチングを有効化 - 成功率を向上"
-        )
-        params_desc.setStyleSheet("color: #666; font-size: 9pt; margin-top: 10px; padding: 10px; background-color: #f9f9f9; border-radius: 4px;")
-        rust_params_layout.addWidget(params_desc, 9, 0, 1, 2)
-        
-        rust_params_group.setLayout(rust_params_layout)
-        layout.addWidget(rust_params_group)
-
+        # 底部说明（移除高级参数警告）
         layout.addStretch()
         
-        # 设置滚动区域的内容
-        scroll_area.setWidget(content_widget)
-        main_layout.addWidget(scroll_area)
-        
-        return page
+        scroll.setWidget(content)
+        return scroll
 
     def _create_smart_selection_page(self):
-        """创建智能选区设置页面"""
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(20)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # 说明文字
-        desc_label = QLabel("画面内のウィンドウやUI要素を自動認識する機能の設定を行います。")
-        desc_label.setStyleSheet("color: #666; font-size: 10pt; margin-bottom: 10px;")
-        layout.addWidget(desc_label)
-
-        # 智能选择功能组
-        smart_group = QGroupBox("スマート選択")
-        smart_group.setStyleSheet(self._get_group_style())
+        card = SettingCard()
         
-        group_layout = QVBoxLayout()
-        group_layout.setSpacing(15)
-        
-        self.smart_selection_checkbox = QCheckBox("スマート選択を有効にする")
-        self.smart_selection_checkbox.setChecked(self.config_manager.get_smart_selection())
-        self.smart_selection_checkbox.setStyleSheet(self._get_checkbox_style())
-        
-        smart_desc = QLabel(
-            "スマート選択を有効にすると、マウスカーソルの位置に応じて\n"
-            "ウィンドウやボタンなどのUI要素を自動的に検出し、\n"
-            "より正確な範囲選択が可能になります。"
+        self.smart_toggle = ToggleSwitch()
+        row = self._create_toggle_row(
+            "スマート選択を有効にする", 
+            "マウスカーソル位置のUI要素を自動認識します。",
+            self.config_manager.get_smart_selection(),
+            self.smart_toggle
         )
-        smart_desc.setStyleSheet("color: #666; font-size: 9pt; margin-left: 25px;")
         
-        group_layout.addWidget(self.smart_selection_checkbox)
-        group_layout.addWidget(smart_desc)
+        card.layout.addLayout(row)
+        layout.addWidget(card)
         
-        smart_group.setLayout(group_layout)
-        layout.addWidget(smart_group)
-
-        # 使用说明
-        hint_label = QLabel(
-            "💡 使い方:\n"
-            "• スクリーンショット時に、カーソルを移動するとUI要素が自動的にハイライトされます\n"
-            "• ハイライトされた領域をクリックすると、その範囲でキャプチャーを取れます\n"
-            "• もちろん手動で範囲を選択も大丈夫です"
+        # 图文说明区域（可以用 QLabel 贴图，这里用文字模拟）
+        info_card = QLabel(
+            "💡 使い方:\n\n"
+            "1. キャプチャ時にカーソルをウィンドウ上に移動\n"
+            "2. 自動的に青い枠でエリアがハイライトされます\n"
+            "3. クリックしてその範囲を選択"
         )
-        hint_label.setStyleSheet("""
-            background-color: #f3e5f5;
-            color: #7b1fa2;
-            padding: 15px;
-            border-radius: 6px;
-            border-left: 4px solid #9c27b0;
-            font-size: 9pt;
-            line-height: 1.6;
+        info_card.setStyleSheet("""
+            background-color: #E9F0FD; 
+            color: #4C72B0; 
+            border-radius: 8px; 
+            padding: 20px;
+            font-size: 13px;
+            line-height: 1.5;
         """)
-        layout.addWidget(hint_label)
-
+        layout.addWidget(info_card)
+        
         layout.addStretch()
         return page
 
-    def _create_button_area(self):
-        """创建底部按钮区域"""
+    def _create_log_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        card = SettingCard()
+
+        # 日志开关
+        self.log_toggle = ToggleSwitch()
+        row_log = self._create_toggle_row(
+            "ログを保存する",
+            "アプリの動作記録をファイルに保存します。",
+            self.config_manager.get_log_enabled(),
+            self.log_toggle
+        )
+        card.layout.addLayout(row_log)
+        card.layout.addWidget(HLine())
+
+        # 路径显示
+        path_layout = QHBoxLayout()
+        current_dir = self.config_manager.get_log_dir()
+        self.path_lbl = QLabel(current_dir)
+        self.path_lbl.setStyleSheet("color: #576B95;")  # 仿链接色
+        self.path_lbl.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针
+        self.path_lbl.setWordWrap(True)
+        
+        lbl_title = QLabel("保存場所:")
+        path_layout.addWidget(lbl_title)
+        path_layout.addWidget(self.path_lbl)
+        card.layout.addLayout(path_layout)
+        
+        card.layout.addWidget(HLine())
+
+        # 按钮组
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
         
-        # 重置按钮（左侧）
-        reset_btn = QPushButton("🔄 設定をリセット")
-        reset_btn.clicked.connect(self._reset_all_settings)
-        reset_btn.setFixedSize(150, 40)
-        reset_btn.setStyleSheet("""
+        btn_style = """
             QPushButton {
-                background-color: #ff9800;
-                color: white;
+                background-color: #F2F2F2;
                 border: none;
-                padding: 8px 20px;
-                font-size: 10pt;
-                border-radius: 6px;
-                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 12px;
+                color: #333;
             }
-            QPushButton:hover {
-                background-color: #fb8c00;
-            }
-            QPushButton:pressed {
-                background-color: #f57c00;
-            }
-        """)
-        btn_layout.addWidget(reset_btn)
+            QPushButton:hover { background-color: #E6E6E6; }
+        """
+        
+        btn_change = QPushButton("変更")
+        btn_change.setStyleSheet(btn_style)
+        btn_change.clicked.connect(self._change_log_dir)
+        
+        btn_open = QPushButton("開く")
+        btn_open.setStyleSheet(btn_style)
+        btn_open.clicked.connect(self._open_log_dir)
         
         btn_layout.addStretch()
+        btn_layout.addWidget(btn_change)
+        btn_layout.addWidget(btn_open)
+        
+        card.layout.addLayout(btn_layout)
+        layout.addWidget(card)
+        layout.addStretch()
+        return page
 
-        # 取消按钮
+    # ================= 底部按钮 =================
+
+    def _create_button_area(self):
+        layout = QHBoxLayout()
+        layout.setSpacing(15)
+        
+        reset_btn = QPushButton("このページをリセット")
+        reset_btn.setCursor(Qt.PointingHandCursor)
+        reset_btn.setStyleSheet("""
+            QPushButton { color: #FA5151; background: transparent; border: none; font-size: 13px; }
+            QPushButton:hover { color: #D00000; }
+        """)
+        reset_btn.clicked.connect(self._reset_current_page)
+        
         cancel_btn = QPushButton("キャンセル")
-        cancel_btn.clicked.connect(self.reject)
-        cancel_btn.setFixedSize(120, 40)
+        cancel_btn.setFixedSize(100, 32)
+        cancel_btn.setCursor(Qt.PointingHandCursor)
         cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f5f5f5;
-                color: #333;
-                border: 2px solid #ddd;
-                padding: 8px 20px;
-                font-size: 10pt;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #e0e0e0;
-                border-color: #bbb;
-            }
-            QPushButton:pressed {
-                background-color: #d0d0d0;
-            }
+            QPushButton { background-color: #E5E5E5; border-radius: 4px; border: none; color: #333; }
+            QPushButton:hover { background-color: #D6D6D6; }
         """)
-        btn_layout.addWidget(cancel_btn)
-
-        # 确定按钮
+        cancel_btn.clicked.connect(self.reject)
+        
         ok_btn = QPushButton("適用")
-        ok_btn.clicked.connect(self.accept)
-        ok_btn.setDefault(True)
-        ok_btn.setFixedSize(120, 40)
+        ok_btn.setFixedSize(100, 32)
+        ok_btn.setCursor(Qt.PointingHandCursor)
         ok_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                font-size: 10pt;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:pressed {
-                background-color: #3d8b40;
-            }
+            QPushButton { background-color: #07C160; border-radius: 4px; border: none; color: #FFF; font-weight: bold; }
+            QPushButton:hover { background-color: #06AD56; }
         """)
-        btn_layout.addWidget(ok_btn)
+        ok_btn.clicked.connect(self.accept)
 
-        return btn_layout
+        layout.addWidget(reset_btn)
+        layout.addStretch()
+        layout.addWidget(cancel_btn)
+        layout.addWidget(ok_btn)
+        
+        return layout
 
-    def _reset_all_settings(self):
-        """重置所有设置为默认值"""
-        from PyQt5.QtWidgets import QMessageBox
-        
-        # 确认对话框
-        reply = QMessageBox.question(
-            self,
-            '設定をリセット',
-            'すべての設定をデフォルト値にリセットしますか？\nこの操作は元に戻せません。',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            # 重置快捷键
-            self.hotkey_input.setText("ctrl+shift+a")
-            
-            # 重置任务栏按钮（默认关闭）
-            self.taskbar_button_checkbox.setChecked(False)
-            
-            # 重置智能选择（默认关闭）
-            self.smart_selection_checkbox.setChecked(False)
-            
-            # 重置长截图引擎
-            self.engine_combo.setCurrentIndex(0)  # 自動選択
-            
-            # 重置 Rust 引擎参数
-            self.sample_rate_input.setValue(0.9)
-            self.min_sample_size_input.setValue(300)
-            self.max_sample_size_input.setValue(800)
-            self.corner_threshold_input.setValue(30)
-            self.descriptor_patch_size_input.setValue(9)
-            self.min_size_delta_input.setValue(1)
-            self.try_rollback_checkbox.setChecked(True)
-            self.distance_threshold_input.setValue(0.2)
-            self.ef_search_input.setValue(32)
-            
-            print("✅ すべての設定をデフォルト値にリセットしました")
-            QMessageBox.information(
-                self,
-                '完了',
-                'すべての設定をデフォルト値にリセットしました。\n「適用」ボタンをクリックして保存してください。',
-                QMessageBox.Ok
-            )
+    # ================= 逻辑处理 =================
 
     def _on_nav_changed(self, index):
-        """导航切换事件"""
-        titles = [
-            "ショートカット設定",
-            "長いスクショ設定",
-            "スマート選択設定"
-        ]
-        if 0 <= index < len(titles):
-            self.content_title.setText(titles[index])
+        title_map = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "ログ設定"]
+        if 0 <= index < len(title_map):
+            self.content_title.setText(title_map[index])
             self.content_stack.setCurrentIndex(index)
 
-    def get_hotkey(self):
-        """获取设置的快捷键"""
-        return self.hotkey_input.text().strip()
+    def _change_log_dir(self):
+        """更改日志目录"""
+        new_dir = QFileDialog.getExistingDirectory(self, "ログ保存フォルダを選択", self.config_manager.get_log_dir())
+        if new_dir:
+            # 保存到配置
+            self.config_manager.set_log_dir(new_dir)
+            # 更新界面显示
+            self.path_lbl.setText(new_dir)
+            # 通知日志系统更新目录
+            from jietuba_logger import get_logger
+            get_logger().set_log_dir(new_dir)
+            # 显示成功消息
+            QMessageBox.information(self, "成功", f"ログフォルダが変更されました:\n{new_dir}")
+
+    def _open_log_dir(self):
+        path = self.config_manager.get_log_dir()
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+        if platform.system() == "Windows":
+            os.startfile(path)
+        elif platform.system() == "Darwin":
+            os.system(f"open {path}")
+        else:
+            os.system(f"xdg-open {path}")
+
+    def _reset_current_page(self):
+        """重置当前页面的设置为默认值"""
+        current_index = self.content_stack.currentIndex()
+        page_names = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "ログ設定"]
+        
+        # 根据当前页面重置不同的设置
+        if current_index == 0:  # 快捷键设置页面
+            self._reset_hotkey_page()
+        elif current_index == 1:  # 长截图设置页面
+            self._reset_long_screenshot_page()
+        elif current_index == 2:  # 智能选择页面
+            self._reset_smart_selection_page()
+        elif current_index == 3:  # 日志设置页面
+            self._reset_log_page()
+        
+ 
+    
+    def _reset_hotkey_page(self):
+        """重置快捷键设置页面"""
+        self.hotkey_input.setText("ctrl+shift+a")
+        self.taskbar_toggle.setChecked(False)
+    
+    def _reset_long_screenshot_page(self):
+        """重置长截图设置页面"""
+        self.engine_combo.setCurrentIndex(0)  # rust
+        self.debug_toggle.setChecked(False)
+        self.cooldown_spinbox.setValue(0.17)  # 默认滚动冷却时间
+        # 高级参数已隐藏，无需重置
+    
+    def _reset_smart_selection_page(self):
+        """重置智能选择页面"""
+        self.smart_toggle.setChecked(False)
+    
+    def _reset_log_page(self):
+        """重置日志设置页面"""
+        self.log_toggle.setChecked(True)
+        # 重置日志目录为默认值
+        from pathlib import Path
+        default = str(Path.home() / ".jietuba" / "logs")
+        self.path_lbl.setText(default)
 
     def accept(self):
-        """应用设置"""
-        # 保存快捷键设置（由调用者处理）
+        """保存所有设置"""
+        # 1. 基础设置
+        self.config_manager.set_taskbar_button(self.taskbar_toggle.isChecked())
+        self.config_manager.set_smart_selection(self.smart_toggle.isChecked())
+        self.config_manager.set_log_enabled(self.log_toggle.isChecked())
         
-        # 保存智能选择设置
-        self.config_manager.set_smart_selection(self.smart_selection_checkbox.isChecked())
-        print(f"💾 智能选择设置已保存: {self.smart_selection_checkbox.isChecked()}")
+        # 2. 引擎和长截图参数
+        self.config_manager.set_long_stitch_engine(self.engine_combo.currentData())
+        self.config_manager.set_long_stitch_debug(self.debug_toggle.isChecked())
+        self.config_manager.settings.setValue('screenshot/scroll_cooldown', self.cooldown_spinbox.value())
         
-        # 保存任务栏按钮设置
-        self.config_manager.set_taskbar_button(self.taskbar_button_checkbox.isChecked())
-        print(f"💾 任务栏按钮设置已保存: {self.taskbar_button_checkbox.isChecked()}")
+        # 3. Rust 参数
+        for key, spinbox in self.spinboxes.items():
+            val = spinbox.value()
+            self.config_manager.settings.setValue(f'screenshot/{key}', val)
         
-        # 保存长截图引擎设置
-        selected_engine = self.engine_combo.currentData()
-        self.config_manager.set_long_stitch_engine(selected_engine)
-        print(f"💾 长截图拼接引擎已保存: {selected_engine}")
-        
-        # 保存 Rust 引擎参数
-        self.config_manager.settings.setValue('screenshot/rust_sample_rate', self.sample_rate_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_min_sample_size', self.min_sample_size_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_max_sample_size', self.max_sample_size_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_corner_threshold', self.corner_threshold_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_descriptor_patch_size', self.descriptor_patch_size_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_min_size_delta', self.min_size_delta_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_try_rollback', self.try_rollback_checkbox.isChecked())
-        self.config_manager.settings.setValue('screenshot/rust_distance_threshold', self.distance_threshold_input.value())
-        self.config_manager.settings.setValue('screenshot/rust_ef_search', self.ef_search_input.value())
-        print(f"💾 Rust 引擎参数已保存:")
-        print(f"   sample_rate={self.sample_rate_input.value()}")
-        print(f"   corner_threshold={self.corner_threshold_input.value()}")
-        print(f"   min_sample_size={self.min_sample_size_input.value()}")
-        print(f"   max_sample_size={self.max_sample_size_input.value()}")
-        print(f"   distance_threshold={self.distance_threshold_input.value()}")
-        print(f"   ef_search={self.ef_search_input.value()}")
-        
-        # 动态更新长截图配置
-        self._apply_long_stitch_config()
-        
+        self.config_manager.settings.setValue('screenshot/rust_try_rollback', self.rollback_toggle.isChecked())
+
+        print("💾 すべての設定を保存しました")
         super().accept()
 
-    def _apply_long_stitch_config(self):
-        """动态应用长截图引擎配置"""
-        try:
-            from jietuba_long_stitch_unified import configure as long_stitch_configure
-            long_stitch_configure(
-                engine=self.engine_combo.currentData(),
-                direction=0,
-                sample_rate=self.sample_rate_input.value(),
-                min_sample_size=self.min_sample_size_input.value(),
-                max_sample_size=self.max_sample_size_input.value(),
-                corner_threshold=self.corner_threshold_input.value(),
-                descriptor_patch_size=self.descriptor_patch_size_input.value(),
-                min_size_delta=self.min_size_delta_input.value(),
-                try_rollback=self.try_rollback_checkbox.isChecked(),
-                distance_threshold=self.distance_threshold_input.value(),
-                ef_search=self.ef_search_input.value(),
-                verbose=True,
-            )
-            print(f"✅ 长截图配置已更新")
-        except Exception as e:
-            print(f"⚠️  更新长截图配置失败: {e}")
-
-    def keyPressEvent(self, event):
-        """处理键盘事件，回车确认"""
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.accept()
-        else:
-            super().keyPressEvent(event)
-
-    # ==================== 样式定义 ====================
+    def get_hotkey(self):
+        return self.hotkey_input.text().strip()
     
-    @staticmethod
-    def _get_group_style():
-        """获取GroupBox样式"""
-        return """
-            QGroupBox {
-                font-weight: bold;
-                font-size: 11pt;
-                border: 2px solid #e0e0e0;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 15px;
-                background-color: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 15px;
-                padding: 0 8px 0 8px;
-                color: #2c3e50;
-            }
-        """
+    def update_hotkey(self, new_hotkey):
+        """更新对话框中显示的快捷键"""
+        self.hotkey_input.setText(new_hotkey)
 
-    @staticmethod
-    def _get_input_style():
-        """获取输入框样式"""
-        return """
-            QLineEdit {
-                padding: 10px 12px;
-                font-size: 11pt;
-                border: 2px solid #e0e0e0;
-                border-radius: 6px;
-                background-color: white;
-            }
-            QLineEdit:focus {
-                border-color: #4CAF50;
-            }
-            QLineEdit:hover {
-                border-color: #c0c0c0;
-            }
-        """
+# ==========================================
+# 3. 用于测试的 Mock 类 (当你集成时请删除这部分)
+# ==========================================
+if __name__ == "__main__":
+    from PyQt5.QtCore import QSettings
+    
+    class MockConfig:
+        def __init__(self):
+            self.settings = QSettings("TestApp", "Settings")
+        def get_taskbar_button(self): return False
+        def set_taskbar_button(self, v): pass
+        def get_smart_selection(self): return False
+        def set_smart_selection(self, v): pass
+        def get_log_enabled(self): return True
+        def set_log_enabled(self, v): pass
+        def get_log_dir(self): return os.path.expanduser("~")
+        def set_log_dir(self, v): pass
+        def get_long_stitch_engine(self): return "hash_rust"
+        def set_long_stitch_engine(self, v): pass
+        def get_long_stitch_debug(self): return False
+        def set_long_stitch_debug(self, v): pass
 
-    @staticmethod
-    def _get_combo_style():
-        """获取下拉框样式"""
-        return """
-            QComboBox {
-                padding: 10px 12px;
-                font-size: 10pt;
-                border: 2px solid #e0e0e0;
-                border-radius: 6px;
-                background-color: white;
-            }
-            QComboBox:focus {
-                border-color: #4CAF50;
-            }
-            QComboBox:hover {
-                border-color: #c0c0c0;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 30px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid #666;
-                margin-right: 10px;
-            }
-            QComboBox QAbstractItemView {
-                border: 2px solid #e0e0e0;
-                border-radius: 6px;
-                background-color: white;
-                selection-background-color: #4CAF50;
-                selection-color: white;
-                padding: 5px;
-            }
-        """
-
-    @staticmethod
-    def _get_checkbox_style():
-        """获取复选框样式"""
-        return """
-            QCheckBox {
-                color: #333;
-                font-size: 10pt;
-                padding: 8px;
-                spacing: 10px;
-            }
-            QCheckBox::indicator {
-                width: 20px;
-                height: 20px;
-            }
-            QCheckBox::indicator:unchecked {
-                border: 2px solid #bbb;
-                background-color: white;
-                border-radius: 4px;
-            }
-            QCheckBox::indicator:unchecked:hover {
-                border-color: #4CAF50;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #4CAF50;
-                background-color: #4CAF50;
-                border-radius: 4px;
-                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEzLjMzMzMgNEw2IDExLjMzMzNMMi42NjY2NyA4IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-            }
-        """
+    app = QApplication(sys.argv)
+    font = QFont("Microsoft YaHei", 9)
+    app.setFont(font)
+    
+    dlg = SettingsDialog(MockConfig())
+    dlg.show()
+    sys.exit(app.exec_())
+    if __name__ == "__main__":
+        app = QApplication(sys.argv)
+        font = QFont("Microsoft YaHei", 9)
+        app.setFont(font)
+        
+        dlg = SettingsDialog(MockConfig())
+        dlg.show()
+        sys.exit(app.exec_())

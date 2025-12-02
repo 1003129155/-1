@@ -26,7 +26,13 @@ import os
 import gc
 import time
 import threading
+import io
+import atexit
+import traceback
+import signal
+import faulthandler
 from datetime import datetime
+from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QComboBox, QSystemTrayIcon, QMenu, QAction, 
@@ -39,6 +45,8 @@ from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot, QAbstractNativeEventF
 from jietuba_screenshot import Slabel
 from jietuba_public import CONFIG_DICT
 from jietuba_settings import SettingsDialog
+from jietuba_long_stitch_unified import normalize_engine_value
+from jietuba_logger import get_logger
 
 # 内置全局快捷键实现（Windows）
 # 使用 RegisterHotKey + 原生事件过滤器捕获 WM_HOTKEY
@@ -360,10 +368,11 @@ class ConfigManager:
     def __init__(self):
         # 使用与项目一致的设置命名空间
         self.settings = QSettings('Fandes', 'jietuba')
-        self.hotkey_default = "ctrl+shift+a"
+        self.hotkey_default = "ctrl+1"
         self.right_click_close_default = True
         self.smart_selection_default = False  # 智能选择默认关闭
         self.taskbar_button_default = False  # 任务栏按钮默认关闭
+        self.long_stitch_debug_default = True  # 长截图调试默认开启
     
     def get_hotkey(self):
         return self.settings.value('hotkey/global', self.hotkey_default, type=str)
@@ -388,13 +397,42 @@ class ConfigManager:
         """设置任务栏按钮开关状态"""
         self.settings.setValue('ui/taskbar_button', enabled)
     
+    def get_long_stitch_debug(self):
+        """获取长截图调试日志开关"""
+        return self.settings.value(
+            'screenshot/long_stitch_debug',
+            self.long_stitch_debug_default,
+            type=bool
+        )
+
+    def set_long_stitch_debug(self, enabled: bool):
+        """设置长截图调试日志开关"""
+        self.settings.setValue('screenshot/long_stitch_debug', bool(enabled))
+
     def get_long_stitch_engine(self):
         """获取长截图拼接引擎设置"""
-        return self.settings.value('screenshot/long_stitch_engine', 'auto', type=str)
+        raw_value = self.settings.value('screenshot/long_stitch_engine', 'hash_rust', type=str)
+        normalized = normalize_engine_value(raw_value)
+        
+        # 🆕 如果检测到auto或rust，强制切换为hash_python
+        if normalized in ('auto', 'rust'):
+            print(f"⚠️ 检测到已禁用的引擎 {normalized}，自动切换为 hash_python")
+            normalized = 'hash_python'
+            self.settings.setValue('screenshot/long_stitch_engine', normalized)
+        elif normalized != raw_value:
+            self.settings.setValue('screenshot/long_stitch_engine', normalized)
+        return normalized
     
     def set_long_stitch_engine(self, engine):
         """设置长截图拼接引擎"""
-        self.settings.setValue('screenshot/long_stitch_engine', engine)
+        normalized = normalize_engine_value(engine)
+        
+        # 🆕 如果尝试设置auto或rust，强制切换为hash_python
+        if normalized in ('auto', 'rust'):
+            print(f"⚠️ 拒绝设置已禁用的引擎 {normalized}，自动切换为 hash_python")
+            normalized = 'hash_python'
+        
+        self.settings.setValue('screenshot/long_stitch_engine', normalized)
     
     # 绘画工具配置管理
     def get_tool_settings(self):
@@ -429,6 +467,24 @@ class ConfigManager:
         """获取单个工具的设置"""
         return self.settings.value(f'tools/{tool_name}/{setting_key}', default_value)
 
+    def get_log_enabled(self):
+        """获取日志开关状态"""
+        return self.settings.value('log/enabled', True, type=bool)
+    
+    def set_log_enabled(self, enabled):
+        """设置日志开关状态"""
+        self.settings.setValue('log/enabled', enabled)
+    
+    def get_log_dir(self):
+        """获取日志保存目录"""
+        from pathlib import Path
+        default_dir = str(Path.home() / ".jietuba" / "logs")
+        return self.settings.value('log/directory', default_dir, type=str)
+    
+    def set_log_dir(self, directory):
+        """设置日志保存目录"""
+        self.settings.setValue('log/directory', directory)
+
 
 class MainWindow(QMainWindow):
     """主窗口"""
@@ -445,6 +501,14 @@ class MainWindow(QMainWindow):
 
         # 初始化组件
         self.config_manager = ConfigManager()
+        
+        # 初始化日志系统
+        from jietuba_logger import get_logger
+        logger = get_logger()
+        log_enabled = self.config_manager.get_log_enabled()
+        log_dir = self.config_manager.get_log_dir()
+        logger.set_enabled(log_enabled)
+        logger.set_log_dir(log_dir)
         
         # 初始化快捷键管理器
         self.hotkey_manager = None
@@ -473,8 +537,27 @@ class MainWindow(QMainWindow):
         # 标记程序是否真正退出
         self.really_quit = False
 
+
+        # 预加载设置对话框（延迟创建，避免阻塞启动）
+        self._settings_dialog = None
+        QTimer.singleShot(1000, self._preload_settings_dialog)
         # 程序启动后做一次“长截图”相关的轻量预热，避免首次点击时卡顿
         self._schedule_long_screenshot_warm_up()
+
+    def _preload_settings_dialog(self):
+        """预加载设置对话框，避免首次打开时卡顿"""
+        try:
+            if self._settings_dialog is None:
+                print("⚙️ [预加载] 开始预加载设置对话框...")
+                self._settings_dialog = SettingsDialog(
+                    self.config_manager, 
+                    self.current_hotkey, 
+                    self
+                )
+                # 不显示，仅创建
+                print("✅ [预加载] 设置对话框预加载完成")
+        except Exception as e:
+            print(f"⚠️ [预加载] 设置对话框预加载失败: {e}")
 
     def _schedule_long_screenshot_warm_up(self):
         """异步预热长截图所需的重资源，减少首次点击卡顿。
@@ -552,8 +635,7 @@ class MainWindow(QMainWindow):
                 print(f"   DPI比例: {self._last_dpi_ratio:.2f} -> {current_dpi_ratio:.2f}")
                 
                 # 通知截图模块刷新屏幕缓存
-                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
-                    self.screenshot_widget.refresh_screen_cache()
+                self._schedule_screen_cache_refresh()
                 
                 # 重新设置窗口大小以适应新的显示器配置
                 self._setup_window_size()
@@ -589,6 +671,21 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             print(f"❌ [ERROR] 窗口状态检查时出错: {e}")
+
+    def _schedule_screen_cache_refresh(self):
+        """在后台线程刷新屏幕缓存，避免阻塞UI线程。"""
+        if getattr(self, '_screen_cache_refresh_inflight', False):
+            return
+
+        def _do_refresh():
+            try:
+                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
+                    self.screenshot_widget.refresh_screen_cache()
+            finally:
+                self._screen_cache_refresh_inflight = False
+
+        self._screen_cache_refresh_inflight = True
+        threading.Thread(target=_do_refresh, daemon=True).start()
 
     def _setup_screenshot(self):
         """初始化截图组件"""
@@ -884,7 +981,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.05 | 更新日: 2025.11/17")
+        self.version_label = QLabel("バージョン: 1.08 | 更新日: 2025.11/27")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
@@ -1032,14 +1129,22 @@ class MainWindow(QMainWindow):
         try:
             print(f"🔍 [DEBUG] 打开应用设置对话框，当前快捷键: {self.current_hotkey}")
             
-            dialog = SettingsDialog(self.config_manager, self.current_hotkey, self)
-            print("🔍 [DEBUG] 设置对话框已创建")
+            # 使用预加载的对话框，或首次创建
+            if self._settings_dialog is None:
+                print("⚠️ [DEBUG] 设置对话框未预加载，立即创建...")
+                self._settings_dialog = SettingsDialog(self.config_manager, self.current_hotkey, self)
+            else:
+                print("✅ [DEBUG] 使用预加载的设置对话框")
+                # 更新对话框的快捷键显示
+                self._settings_dialog.update_hotkey(self.current_hotkey)
             
-            result = dialog.exec_()
+            print("🔍 [DEBUG] 设置对话框已准备")
+            
+            result = self._settings_dialog.exec_()
             print(f"🔍 [DEBUG] 对话框执行结果: {result}")
             
             if result == QDialog.Accepted:
-                new_hotkey = dialog.get_hotkey()
+                new_hotkey = self._settings_dialog.get_hotkey()
                 print(f"🔍 [DEBUG] 用户输入的新快捷键: '{new_hotkey}'")
                 
                 if new_hotkey and new_hotkey != self.current_hotkey:
@@ -1239,6 +1344,10 @@ class MainWindow(QMainWindow):
 
 def main():
     """主函数"""
+    logger = get_logger()
+    logger.setup()
+    logger.info("🚀 [Watchdog] main() 启动")
+
     app = QApplication(sys.argv)
     # 托盘应用关键设置：避免所有窗口被隐藏/关闭时自动退出
 

@@ -205,63 +205,26 @@ class UnifiedTextDrawer:
                 # 创建撤销备份 - 特殊处理钉图窗口
                 if hasattr(parent, 'backup_shortshot'):
                     try:
-                        # 检查是否在钉图窗口环境中
+                        # 判断是钉图窗口还是普通截图窗口
                         is_pinned_window = False
                         pinned_window = None
                         
-                        # 优先检查parent是否直接在钉图模式下
-                        if hasattr(parent, 'mode') and parent.mode == "pinned" and hasattr(parent, 'current_pinned_window'):
-                            pinned_window = parent.current_pinned_window
+                        # 检查parent的类名是否为Freezer（钉图窗口）
+                        if parent.__class__.__name__ == 'Freezer':
                             is_pinned_window = True
-                            print(f"🎨 文字撤销调试: 通过mode属性检测到钉图模式")
-                        else:
-                            # 回退到原有的检查逻辑
-                            # 检查parent是否有freeze_imgs属性且有钉图窗口
-                            if hasattr(parent, 'parent') and hasattr(parent.parent, 'freeze_imgs'):
-                                freeze_imgs_list = parent.parent.freeze_imgs
-                                if freeze_imgs_list:
-                                    for freeze_window in freeze_imgs_list:
-                                        if hasattr(freeze_window, 'paintlayer'):
-                                            pinned_window = freeze_window
-                                            is_pinned_window = True
-                                            break
-                            elif hasattr(parent, 'freeze_imgs'):
-                                freeze_imgs_list = parent.freeze_imgs
-                                if freeze_imgs_list:
-                                    for freeze_window in freeze_imgs_list:
-                                        if hasattr(freeze_window, 'paintlayer'):
-                                            pinned_window = freeze_window
-                                            is_pinned_window = True
-                                            break
+                            pinned_window = parent
+                        # 或检查是否有origin_imgpix属性（钉图窗口特有）
+                        elif hasattr(parent, 'origin_imgpix'):
+                            is_pinned_window = True
+                            pinned_window = parent
                         
                         if is_pinned_window and pinned_window:
-                            # 钉图窗口：确保备份系统已初始化，然后先合并图层，再备份
-                            print(f"🎨 文字撤销调试: 钉图窗口文字绘制完成，调用图层合并和备份")
-                            
-                            # 确保钉图窗口备份系统已初始化
-                            if not hasattr(pinned_window, 'backup_pic_list') or not pinned_window.backup_pic_list:
-                                print(f"🎨 文字撤销调试: 钉图窗口备份系统未初始化，进行初始化")
-                                # 这种情况不应该发生，因为copy_screenshot_backup_history应该已经初始化了
-                                # 但如果确实发生了，我们需要确保有正确的初始状态
-                                pinned_window.backup_pic_list = [pinned_window.showing_imgpix.copy()]
-                                pinned_window.backup_ssid = 0
-                                if not hasattr(pinned_window, '_original_backup_list'):
-                                    pinned_window._original_backup_list = [pinned_window.showing_imgpix.copy()]
-                                print(f"🎨 文字撤销调试: 应急初始化完成，backup_ssid={pinned_window.backup_ssid}")
-                            
-                            # 检查当前备份状态
-                            print(f"🎨 文字撤销调试: 绘制前状态 - backup_ssid={pinned_window.backup_ssid}, 列表长度={len(pinned_window.backup_pic_list)}")
-                            
-                            pinned_window._merge_paint_to_base()  # 合并绘画层到底图
-                            pinned_window.backup_shortshot()      # 备份钉图窗口状态
-                            
-                            # 检查备份后状态
-                            print(f"🎨 文字撤销调试: 绘制后状态 - backup_ssid={pinned_window.backup_ssid}, 列表长度={len(pinned_window.backup_pic_list)}")
+                            # 钉图窗口：先合并图层，再备份
+                            pinned_window._merge_paint_to_base()
+                            pinned_window.backup_shortshot()
                         else:
                             # 普通截图窗口：直接备份
                             parent.backup_shortshot()
-                        
-                        print(f"统一文字绘制: 绘制文字'{text.strip()}'完成，进行备份")
                     except Exception as backup_error:
                         print(f"统一文字绘制: 备份时出错: {backup_error}")
                 
@@ -695,8 +658,8 @@ class PaintLayer(QLabel):
             print('oninit return')
             return
             
-        # 画鼠标圆圈（工具激活时）
-        if 1 in self.parent.painter_tools.values():
+        # 画鼠标圆圈（工具激活时，但排除文字工具）
+        if 1 in self.parent.painter_tools.values() and not self.parent.painter_tools.get('drawtext_on'):
             painter = QPainter(self)
             color = QColor(self.parent.pencolor)
             color.setAlpha(255)

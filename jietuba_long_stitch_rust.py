@@ -133,16 +133,6 @@ class RustLongStitch:
                 print(f"      - 特征点匹配成功")
             else:
                 print(f"   ❌ 未找到重叠区域:")
-                print(f"      可能原因:")
-                print(f"      1. 特征点不足（图片太简单/纯色）")
-                print(f"         → 降低 corner_threshold (当前={self._corner_threshold})")
-                print(f"         → 推荐值: {max(5, self._corner_threshold - 10)}")
-                print(f"      2. 图片被缩得太小（细节丢失）")
-                print(f"         → 提高 sample_rate (当前={self._sample_rate})")
-                print(f"         → 推荐值: {min(1.0, self._sample_rate + 0.2):.1f}")
-                print(f"      3. 图片内容差异过大（不连续）")
-                print(f"         → 检查截图顺序和完整性")
-
         return overlap_size
 
     def export(self) -> Optional[Image.Image]:
@@ -293,26 +283,6 @@ def stitch_pil_images(
                 print(f"成功: {success_count}")
                 print(f"失败: {fail_count}")
                 print(f"成功率: {success_count/(len(images)-1)*100:.1f}%")
-                print(f"\n💡 失败原因分析与解决方案:")
-                print(f"")
-                print(f"1. 特征点不足 ← 最常见原因")
-                print(f"   问题: 图片中可识别的角点/拐点太少")
-                print(f"   当前值: corner_threshold = {corner_threshold}")
-                print(f"   解决: 降低阈值以检测更多特征点")
-                print(f"   建议: corner_threshold = {max(5, corner_threshold - 10)} 到 {max(10, corner_threshold - 20)}")
-                print(f"   说明: 阈值越低 = 越宽松 = 检测更多不明显的角点")
-                print(f"")
-                print(f"2. 采样率过低")
-                print(f"   问题: 图片被缩得太小，细节丢失")
-                print(f"   当前值: sample_rate = {sample_rate} (处理尺寸为原图的 {sample_rate*100:.0f}%)")
-                print(f"   解决: 提高采样率以保留更多细节")
-                print(f"   建议: sample_rate = {min(1.0, sample_rate + 0.2):.1f}")
-                print(f"   说明: 采样率越高 = 图片越大 = 细节越清晰（但速度变慢）")
-                print(f"")
-                print(f"3. 图片差异过大")
-                print(f"   问题: 两张截图之间没有重叠区域")
-                print(f"   检查: 确认截图是连续的，中间没有跳过内容")
-                print(f"")
                 print(f"🔄 系统将自动切换到 Python 哈希引擎（基于像素哈希，更鲁棒）...")
                 print(f"{'='*60}")
             return None

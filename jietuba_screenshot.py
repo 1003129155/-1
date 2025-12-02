@@ -19,6 +19,8 @@ import math
 import os
 import sys
 import time
+import ctypes
+from ctypes import wintypes
 from collections import deque
 from PyQt5.QtCore import QPoint, QRectF, QMimeData, QSize
 from PyQt5.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
@@ -227,10 +229,37 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         """由主程序调用，强制刷新屏幕缓存（解决休眠后拔插显示器问题）"""
         try:
             print("🔄 [截图] 收到屏幕变化通知，刷新缓存...")
-            # 发送轻量级系统消息，让Qt重新检测屏幕
-            import ctypes
-            ctypes.windll.user32.SendMessageW(0xFFFF, 0x001A, 0, 0)
-            print("✅ [截图] 屏幕缓存已刷新")
+            if not sys.platform.startswith("win"):
+                print("ℹ️ [截图] 非Windows环境，跳过刷新")
+                return
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            HWND_BROADCAST = 0xFFFF
+            WM_SETTINGCHANGE = 0x001A
+            SMTO_ABORTIFHUNG = 0x0002
+            SMTO_NOTIMEOUTIFNOTHUNG = 0x0008
+            timeout_ms = 200
+
+            start = time.time()
+            result = wintypes.DWORD()
+            ok = user32.SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG,
+                timeout_ms,
+                ctypes.byref(result)
+            )
+
+            if ok == 0:
+                last_error = kernel32.GetLastError()
+                print(f"⚠️ [截图] SendMessageTimeout 超时/失败(err={last_error})，改用 PostMessage")
+                user32.PostMessageW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0)
+            else:
+                cost = (time.time() - start) * 1000
+                print(f"✅ [截图] 屏幕缓存刷新完成，耗时 {cost:.1f} ms")
         except Exception as e:
             print(f"⚠️ [截图] 刷新屏幕缓存失败: {e}")
 
@@ -1800,7 +1829,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # 保存到文件（使用与普通截图相同的保存目录）
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"長スクショ_{timestamp}.png"
+            
+            # 🆕 根据截图方向设置文件名
+            direction_suffix = ""
+            if hasattr(self.scroll_capture_window, 'scroll_direction'):
+                if self.scroll_capture_window.scroll_direction == "horizontal":
+                    direction_suffix = "_横"
+                else:
+                    direction_suffix = "_縦"
+            
+            filename = f"長スクショ{direction_suffix}_{timestamp}.png"
             filepath = os.path.join(self.screenshot_save_dir, filename)
             
             try:
@@ -1970,6 +2008,59 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         print(f"📋 钉图备份: 复制截图历史，裁剪区域: ({crop_x}, {crop_y}, {crop_w}, {crop_h})")
         freezer.copy_screenshot_backup_history(crop_x, crop_y, crop_w, crop_h)
+        
+        # 🧹 立即清理主窗口的全屏图片和备份历史（释放大量内存）
+        total_freed_mb = 0
+        
+        # 1. 清理备份历史列表
+        if hasattr(self, 'backup_pic_list') and self.backup_pic_list:
+            backup_count = len(self.backup_pic_list)
+            try:
+                total_pixels = sum(p.width() * p.height() for p in self.backup_pic_list if p and not p.isNull())
+                freed_mb = total_pixels * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理备份历史: {backup_count} 个备份, 约 {freed_mb:.1f}MB")
+            except Exception as e:
+                print(f"🧹 清理备份历史: {backup_count} 个备份")
+            
+            self.backup_pic_list.clear()
+            self.backup_ssid = 0
+        
+        # 2. 清理原始图片副本
+        if hasattr(self, 'originalPix') and self.originalPix and not self.originalPix.isNull():
+            try:
+                freed_mb = self.originalPix.width() * self.originalPix.height() * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理原始图片: {self.originalPix.width()}x{self.originalPix.height()}, 约 {freed_mb:.1f}MB")
+            except:
+                print(f"🧹 清理原始图片")
+            self.originalPix = None
+        
+        # 3. 清理主窗口显示的图片（QLabel的pixmap）
+        if self.pixmap() and not self.pixmap().isNull():
+            try:
+                freed_mb = self.pixmap().width() * self.pixmap().height() * 4 / 1024 / 1024
+                total_freed_mb += freed_mb
+                print(f"🧹 清理主窗口图片: {self.pixmap().width()}x{self.pixmap().height()}, 约 {freed_mb:.1f}MB")
+            except:
+                print(f"🧹 清理主窗口图片")
+            self.setPixmap(QPixmap())  # 设置为空图片
+        
+        # 4. 清理绘画层图片
+        if hasattr(self, 'paintlayer') and self.paintlayer:
+            paintlayer_pix = self.paintlayer.pixmap()
+            if paintlayer_pix and not paintlayer_pix.isNull():
+                try:
+                    freed_mb = paintlayer_pix.width() * paintlayer_pix.height() * 4 / 1024 / 1024
+                    total_freed_mb += freed_mb
+                    print(f"🧹 清理绘画层图片: {paintlayer_pix.width()}x{paintlayer_pix.height()}, 约 {freed_mb:.1f}MB")
+                except:
+                    print(f"🧹 清理绘画层图片")
+                self.paintlayer.setPixmap(QPixmap())  # 设置为空图片
+        
+        print(f"✅ 主窗口图片资源已清空，共释放约 {total_freed_mb:.1f}MB 内存")
+        print(f"💡 钉图窗口已有裁剪后的备份（占用更小），主窗口资源可安全释放")
+
         
         # 在创建钉图窗口时自动保存图片到桌面上的スクショ文件夹
         try:
@@ -2311,6 +2402,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         if (x1 - x0) < 1 or (y1 - y0) < 1:
             # 移除了范围过小<1提示
             return
+        
         self.final_get_img = pix.copy(x0, y0, w, h)
 
         if save_as:
@@ -2630,12 +2722,19 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.y1 = y
         if self.y1 > self.y0:
             self.y1 += 1
+        elif self.y1 < self.y0:
+            self.y1 -= 1
         else:
-            self.y0 += 1
+            # 完全水平拖动时，保证至少1px高度
+            self.y1 = self.y0 + (1 if y >= self.ry0 else -1)
+
         if self.x1 > self.x0:
             self.x1 += 1
+        elif self.x1 < self.x0:
+            self.x1 -= 1
         else:
-            self.x0 += 1
+            # 完全垂直拖动时，保证至少1px宽度
+            self.x1 = self.x0 + (1 if x >= self.rx0 else -1)
 
     def mousePressEvent(self, event):
         # 如果是钉图模式并且有绘图工具激活，检查事件是否来自钉图窗口的委托
@@ -2955,10 +3054,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self._commit_selection()
                 return
             
-            # 2. 智能选区确认：点击未拖动 + 智能选区开启
+            # 2. 智能选区确认:点击未拖动 + 智能选区开启
             if self._should_confirm_smart_selection():
                 print("🎯 [智能选区] 确认选区")
                 self.finding_rect = False
+                self.left_button_push = False  # 重置鼠标按下标志，避免后续绘制工具误触发
                 self.choice()
                 return
             
@@ -3239,6 +3339,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 # 延迟初始化智能选区，仅在用户真正需要时才进行
                 if not self._smart_selection_initialized:
                     self._lazy_init_smart_selection()
+                
+                # 查找目标窗口矩形
                 self.x0, self.y0, self.x1, self.y1 = self.finder.find_targetrect((self.mouse_posx, self.mouse_posy))
                 self.setCursor(QCursor(QPixmap(":/smartcursor.png").scaled(32, 32, Qt.KeepAspectRatio), 16, 16))
                 # print(self.x0, self.y0, self.x1, self.y1 )

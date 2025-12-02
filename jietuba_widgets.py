@@ -202,7 +202,7 @@ class PinnedPaintLayer(QLabel):
         if not self.main_window or self.main_window.on_init:
             print('oninit return')
             return
-        if 1 in self.main_window.painter_tools.values():  # 如果有画笔工具打开
+        if 1 in self.main_window.painter_tools.values() and not self.main_window.painter_tools.get('drawtext_on'):  # 如果有画笔工具打开（排除文字工具）
             painter = QPainter(self)
             color = QColor(self.main_window.pencolor)
             color.setAlpha(255)
@@ -421,6 +421,22 @@ class PinnedPaintLayer(QLabel):
                 
                 if success:
                     print("钉图模式: 文字绘制完成")
+
+                    # 文字绘制完成后，立即将绘画层内容同步到底图，确保钉图窗口本身拥有最新状态
+                    try:
+                        if hasattr(self._parent_widget, '_merge_paint_to_base'):
+                            self._parent_widget._merge_paint_to_base()
+                    except Exception as merge_error:
+                        print(f"⚠️ 钉图模式: 文字合并到底图失败: {merge_error}")
+
+                    # 同步创建钉图窗口的撤销记录（独立于主窗口的备份列表）
+                    try:
+                        if hasattr(self._parent_widget, 'backup_shortshot'):
+                            self._parent_widget.backup_shortshot()
+                            print("📋 钉图模式: 文字步骤已写入撤销栈")
+                    except Exception as backup_error:
+                        print(f"⚠️ 钉图模式: 文字备份失败: {backup_error}")
+
                     self.update()
                 else:
                     print("钉图模式: 文字内容为空，不绘制")
@@ -479,8 +495,8 @@ class PinnedPaintLayer(QLabel):
             empty_pix.fill(Qt.transparent)
             self.setPixmap(empty_pix)
             
-            # 断开引用
-            self.parent = None
+            # ⚠️ 断开循环引用 - 防止内存泄漏
+            self._parent_widget = None
             self.main_window = None
             
             # 调用父类清理
@@ -504,19 +520,19 @@ class Freezer(QLabel):
         
         self.tips_shower = TipsShower(" ",(QApplication.desktop().width()//2,50,120,50))
         self.tips_shower.hide()
+        
         self.origin_imgpix = img
         self.showing_imgpix = self.origin_imgpix
+        
         self.listpot = listpot
         
-        # 检查图像是否有效
-        if self.showing_imgpix:
+        # 设置图像
+        if self.showing_imgpix and not self.showing_imgpix.isNull():
             self.setPixmap(self.showing_imgpix)
         else:
-            print("⚠️ 钉图窗口: 初始化时图像为空")
-            # 创建一个默认的空图像以防止后续错误
-            self.showing_imgpix = QPixmap(100, 100)
-            self.showing_imgpix.fill(Qt.white)
-            self.setPixmap(self.showing_imgpix)
+            # 如果图像无效，直接报错而不是创建无意义的空白图
+            raise ValueError("钉图窗口初始化失败: 传入的图像为空或无效")
+        
         self.settingOpacity = False
         self.setWindowOpacity(1.0)  # 设置为完全不透明
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -608,34 +624,13 @@ class Freezer(QLabel):
     def _merge_paint_to_base(self):
         """将绘画层内容合并到底图，然后清空绘画层"""
         try:
-            # 检查底图是否存在
-            print(f"🔍 钉图合并调试: showing_imgpix属性存在={hasattr(self, 'showing_imgpix')}")
-            if hasattr(self, 'showing_imgpix'):
-                print(f"🔍 钉图合并调试: showing_imgpix值={self.showing_imgpix}")
-                print(f"🔍 钉图合并调试: showing_imgpix是否为None={self.showing_imgpix is None}")
-                if self.showing_imgpix:
-                    print(f"🔍 钉图合并调试: showing_imgpix是否为null={self.showing_imgpix.isNull()}")
-            
             # 确保showing_imgpix有效
             if not self._ensure_showing_imgpix_valid():
-                print("❌ 钉图合并: showing_imgpix无效且无法恢复，中止合并")
                 return
-            
-            print(f"📋 钉图合并调试: paintlayer存在={hasattr(self, 'paintlayer')}")
-            if hasattr(self, 'paintlayer'):
-                print(f"📋 钉图合并调试: paintlayer不为空={self.paintlayer is not None}")
-                if self.paintlayer:
-                    paintlayer_pixmap = self.paintlayer.pixmap()
-                    print(f"📋 钉图合并调试: paintlayer.pixmap()存在={paintlayer_pixmap is not None}")
-                    if paintlayer_pixmap:
-                        print(f"📋 钉图合并调试: pixmap不为null={not paintlayer_pixmap.isNull()}")
-                        print(f"📋 钉图合并调试: pixmap尺寸={paintlayer_pixmap.size()}")
             
             if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
                 paint_pixmap = self.paintlayer.pixmap()
                 if paint_pixmap and not paint_pixmap.isNull():
-                    print(f"📋 钉图合并调试: 开始合并，底图尺寸={self.showing_imgpix.size()}，绘画层尺寸={paint_pixmap.size()}")
-                    
                     # 创建新的底图，合并绘画层内容
                     new_base = QPixmap(self.showing_imgpix.size())
                     painter = QPainter(new_base)
@@ -655,37 +650,27 @@ class Freezer(QLabel):
                     # 清空绘画层
                     paint_pixmap.fill(Qt.transparent)
                     self.paintlayer.update()
-                    
-                    print("📋 钉图合并: 绘画层内容已合并到底图")
-                else:
-                    print("📋 钉图合并: 绘画层pixmap为空或null，无需合并")
-            else:
-                print("📋 钉图合并: 没有有效的绘画层，无需合并")
                 
         except Exception as e:
             print(f"❌ 钉图合并: 合并失败: {e}")
     
     def _ensure_showing_imgpix_valid(self):
         """确保showing_imgpix始终有效，如果无效则从origin_imgpix恢复"""
-        if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix or (self.showing_imgpix and self.showing_imgpix.isNull()):
+        # 简化条件：如果showing_imgpix不存在、为None或isNull，则尝试恢复
+        if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix or self.showing_imgpix.isNull():
             if hasattr(self, 'origin_imgpix') and self.origin_imgpix and not self.origin_imgpix.isNull():
-                print("🔧 钉图修复: showing_imgpix无效，从origin_imgpix恢复")
                 self.showing_imgpix = self.origin_imgpix.copy()
                 self.setPixmap(self.showing_imgpix)
                 return True
             else:
-                print("❌ 钉图修复: origin_imgpix也无效，无法恢复")
                 return False
         return True
     
     def _update_for_resize(self, new_width, new_height):
         """缩放时更新底图和备份历史"""
         try:
-            print(f"🔄 钉图缩放: 开始更新到 {new_width}x{new_height}")
-            
             # 确保showing_imgpix有效
             if not self._ensure_showing_imgpix_valid():
-                print("❌ 钉图缩放: showing_imgpix无效且无法恢复，中止缩放更新")
                 return
             
             # 1. 更新showing_imgpix到新尺寸 - 基于原始图像缩放
@@ -698,13 +683,10 @@ class Freezer(QLabel):
                     # 获取原始备份状态的图像
                     if hasattr(self, '_original_backup_list') and current_backup_id < len(self._original_backup_list):
                         original_image = self._original_backup_list[current_backup_id]
-                        print(f"🔄 钉图缩放: 使用原始备份 {current_backup_id} 进行缩放")
                     else:
                         original_image = self.origin_imgpix
-                        print(f"🔄 钉图缩放: 使用origin_imgpix进行缩放")
                 else:
                     original_image = self.origin_imgpix
-                    print(f"🔄 钉图缩放: 使用origin_imgpix进行缩放")
                 
                 # 缩放并更新显示
                 self.showing_imgpix = original_image.scaled(
@@ -713,17 +695,13 @@ class Freezer(QLabel):
                     Qt.SmoothTransformation
                 )
                 self.setPixmap(self.showing_imgpix)
-                print(f"🔄 钉图缩放: showing_imgpix已更新并设置到 {new_width}x{new_height}")
             
             # 2. 更新备份历史中的所有图像到新尺寸
             if hasattr(self, 'backup_pic_list') and self.backup_pic_list:
-                print(f"🔄 钉图缩放: 开始更新 {len(self.backup_pic_list)} 个备份图像")
-                
                 # 保存原始图像列表的引用
                 if not hasattr(self, '_original_backup_list'):
                     # 首次缩放，保存原始尺寸的备份
                     self._original_backup_list = [backup.copy() for backup in self.backup_pic_list]
-                    print(f"🔄 钉图缩放: 保存了 {len(self._original_backup_list)} 个原始备份")
                 
                 # 将所有备份缩放到新尺寸
                 for i in range(len(self.backup_pic_list)):
@@ -735,11 +713,8 @@ class Freezer(QLabel):
                                 Qt.SmoothTransformation
                             )
                             self.backup_pic_list[i] = scaled_backup
-                            print(f"🔄 钉图缩放: 备份 {i} 已从原始尺寸缩放到 {new_width}x{new_height}")
                         except Exception as e:
                             print(f"❌ 钉图缩放: 备份 {i} 缩放失败: {e}")
-                
-                print(f"✅ 钉图缩放: 所有备份已更新完成")
             
         except Exception as e:
             print(f"❌ 钉图缩放: 更新失败: {e}")
@@ -815,6 +790,17 @@ class Freezer(QLabel):
             crop_w, crop_h: 截图区域的宽度和高度
         """
         try:
+            # 🔧 确保showing_imgpix有效（根本修复）
+            if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix or self.showing_imgpix.isNull():
+                print("⚠️ copy_screenshot_backup_history: showing_imgpix无效，尝试从pixmap获取")
+                current_pixmap = self.pixmap()
+                if current_pixmap and not current_pixmap.isNull():
+                    self.showing_imgpix = current_pixmap.copy()
+                    print("✅ copy_screenshot_backup_history: 已从pixmap恢复showing_imgpix")
+                else:
+                    print("❌ copy_screenshot_backup_history: 无法获取有效图像，中止历史复制")
+                    return
+            
             # 检查钉图窗口是否已经有自己的备份历史（表示已经进行过绘画操作）
             has_own_history = (hasattr(self, 'backup_pic_list') and 
                              len(self.backup_pic_list) > 1)
@@ -940,17 +926,8 @@ class Freezer(QLabel):
     def backup_shortshot(self):
         """钉图窗口的备份方法 - 备份当前底图（绘画层内容应该已经合并）"""
         try:
-            # 检查底图是否存在
-            print(f"🔍 钉图备份调试: showing_imgpix属性存在={hasattr(self, 'showing_imgpix')}")
-            if hasattr(self, 'showing_imgpix'):
-                print(f"🔍 钉图备份调试: showing_imgpix值={self.showing_imgpix}")
-                print(f"🔍 钉图备份调试: showing_imgpix是否为None={self.showing_imgpix is None}")
-                if self.showing_imgpix:
-                    print(f"🔍 钉图备份调试: showing_imgpix是否为null={self.showing_imgpix.isNull()}")
-            
             # 确保showing_imgpix有效
             if not self._ensure_showing_imgpix_valid():
-                print("❌ 钉图备份: showing_imgpix无效且无法恢复，中止备份")
                 return
             
             # 直接备份底图（绘画层内容已经通过_merge_paint_to_base合并）
@@ -989,9 +966,6 @@ class Freezer(QLabel):
                 if self.backup_ssid > 0:
                     self.backup_ssid -= 1
             
-            print(f"📋 钉图备份: 创建新备份，当前位置: {self.backup_ssid}, 总数: {len(self.backup_pic_list)}")
-            print(f"📋 钉图备份: 最终验证 - backup_ssid={self.backup_ssid}, 列表长度={len(self.backup_pic_list)}")
-            
         except Exception as e:
             print(f"❌ 钉图备份: 创建备份失败: {e}")
             import traceback
@@ -1000,11 +974,6 @@ class Freezer(QLabel):
     def last_step(self):
         """钉图窗口的撤销方法"""
         try:
-            print(f"🔍 钉图撤销调试: 开始撤销")
-            print(f"🔍 钉图撤销调试: backup_pic_list存在={hasattr(self, 'backup_pic_list')}")
-            print(f"🔍 钉图撤销调试: backup_pic_list长度={len(self.backup_pic_list) if hasattr(self, 'backup_pic_list') and self.backup_pic_list else 0}")
-            print(f"🔍 钉图撤销调试: backup_ssid={getattr(self, 'backup_ssid', '未定义')}")
-            
             if not hasattr(self, 'backup_pic_list') or not self.backup_pic_list:
                 print("📋 钉图撤销: 没有备份历史")
                 return
@@ -2357,20 +2326,18 @@ class Freezer(QLabel):
             return
         
         # 立即从主窗口的列表中移除自己
-        if self.main_window and hasattr(self.main_window, 'freeze_imgs'):
+        main_window_ref = self.main_window  # 保存引用
+        if main_window_ref and hasattr(main_window_ref, 'freeze_imgs'):
             try:
-                if self in self.main_window.freeze_imgs:
-                    self.main_window.freeze_imgs.remove(self)
-                    print(f"✅ [关闭事件] 已从主窗口列表中移除钉图窗口 (剩余: {len(self.main_window.freeze_imgs)})")
-                    
-                    # 立即强制垃圾回收
-                    import gc
-                    gc.collect()
+                if self in main_window_ref.freeze_imgs:
+                    main_window_ref.freeze_imgs.remove(self)
+                    print(f"✅ [关闭事件] 已从主窗口列表中移除钉图窗口 (剩余: {len(main_window_ref.freeze_imgs)})")
                     
                     # 如果这是最后一个窗口，执行深度清理
-                    if len(self.main_window.freeze_imgs) == 0:
+                    if len(main_window_ref.freeze_imgs) == 0:
                         print("🧹 [最后窗口] 执行深度内存清理...")
                         # 多次垃圾回收确保彻底清理
+                        import gc
                         for _ in range(3):
                             gc.collect()
                         try:
@@ -2382,6 +2349,9 @@ class Freezer(QLabel):
                         
             except (ValueError, AttributeError) as ex:
                 print(f"⚠️ 从列表移除时出错: {ex}")
+        
+        # 断开循环引用 - 防止内存泄漏
+        self.main_window = None
         
         # 立即执行清理，不等待
         try:
@@ -2399,10 +2369,12 @@ class Freezer(QLabel):
         # 立即删除，不等待定时器
         self.deleteLater()
         
-        # 立即强制处理删除事件
+        # 立即强制处理删除事件和垃圾回收
         try:
             from PyQt5.QtCore import QCoreApplication
             QCoreApplication.processEvents()
+            import gc
+            gc.collect()
         except:
             pass
         

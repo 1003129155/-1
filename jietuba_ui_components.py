@@ -13,8 +13,8 @@ import math
 import win32gui
 import win32api
 import win32con
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor, QCursor
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPoint
+from PyQt5.QtGui import QFont, QColor, QCursor, QPainter, QPen
 from PyQt5.QtWidgets import QPushButton, QGroupBox, QTextEdit, QFrame
 
 # ================== 多屏调试开关 ==================
@@ -356,36 +356,40 @@ class Finder:
             self.windows = []
 
     def find_targetrect(self, point):
-        """根据鼠标位置查找最小包含窗口"""
+        """根据鼠标位置查找最顶层的包含窗口（基于 Z-order）"""
         x, y = point
         target_rect = None
-        min_area = float('inf')
         found_window_title = None
         
         # 查找所有包含该点的窗口
         matching_windows = []
-        for hwnd, rect, title in self.windows:
+        for idx, (hwnd, rect, title) in enumerate(self.windows):
             x1, y1, x2, y2 = rect
             # 检查点是否在窗口内
             if x1 <= x <= x2 and y1 <= y <= y2:
                 area = (x2 - x1) * (y2 - y1)
-                matching_windows.append((hwnd, rect, title, area))
+                # idx 就是 Z-order（EnumWindows 按从顶到底的顺序枚举）
+                matching_windows.append((idx, area, hwnd, rect, title))
         
-        # 如果找到多个窗口，选择最小的（最具体的）
+        # 如果找到多个重叠窗口
         if matching_windows:
-            # 按面积排序，选择最小的
-            matching_windows.sort(key=lambda w: w[3])
-            hwnd, target_rect, found_window_title, min_area = matching_windows[0]
+            # 排序策略：优先选择 Z-order 最小的（最顶层），其次选择面积最小的（最精确）
+            matching_windows.sort(key=lambda w: (w[0], w[1]))  # (z_order, area)
+            z_order, area, hwnd, target_rect, found_window_title = matching_windows[0]
             
             # 调试信息
             if DEBUG_MONITOR:
-                print(f"🎯 [智能选区] 鼠标({x}, {y})处找到窗口: '{found_window_title[:30]}', 大小: {target_rect[2]-target_rect[0]}x{target_rect[3]-target_rect[1]}")
+                print(f"🎯 [智能选区] 鼠标({x}, {y})处找到窗口: '{found_window_title[:30]}', 大小: {target_rect[2]-target_rect[0]}x{target_rect[3]-target_rect[1]}, Z-order: {z_order}")
                 if len(matching_windows) > 1:
-                    print(f"   共有 {len(matching_windows)} 个重叠窗口，已选择最小的")
+                    print(f"   共有 {len(matching_windows)} 个重叠窗口，已选择最顶层的")
+                    # 输出其他候选窗口
+                    for i, (z, a, h, r, t) in enumerate(matching_windows[1:3], 1):
+                        print(f"   候选{i}: '{t[:20]}', Z-order: {z}, 面积: {a}")
         
-        # 如果没找到窗口，返回全屏（但输出警告）
+        # 如果没找到窗口，返回全屏
         if target_rect is None:
-            print(f"⚠️ [智能选区] 在鼠标位置({x}, {y})未找到有效窗口，返回全屏")
+            if DEBUG_MONITOR:
+                print(f"ℹ️ [智能选区] 在鼠标位置({x}, {y})未找到有效窗口，返回全屏")
             try:
                 w = self.parent.width()
                 h = self.parent.height()
@@ -415,18 +419,25 @@ class AutotextEdit(QTextEdit):
         self.paint = False  # True 表示提交阶段
         self.parent = parent
         try:
-            self.textChanged.connect(self._live_preview_refresh)
+            self.textChanged.connect(self._handle_text_changed)
         except Exception as e:
             print(f"绑定实时文字预览失败: {e}")
         
         self.setFrameStyle(QFrame.NoFrame)
         self.setStyleSheet("background:rgba(0,0,0,0);color:rgba(0,0,0,0);")
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setMouseTracking(True)
+        if self.viewport():
+            self.viewport().setMouseTracking(True)
+            self.viewport().setCursor(Qt.IBeamCursor)
         
         self._cursor_visible = True
         self._cursor_timer = QTimer(self)
         self._cursor_timer.timeout.connect(self._toggle_cursor)
         self._cursor_timer.start(500)
+        self._dragging = False
+        self._drag_start_pos = QPoint()
+        self._drag_start_global = QPoint()
 
     def textAreaChanged(self, minsize=0):
         """根据文本内容自动调整大小"""
@@ -466,6 +477,11 @@ class AutotextEdit(QTextEdit):
                 self.parent.drawtext_pointlist.pop()
             if self.parent and hasattr(self.parent, 'change_tools_fun'):
                 self.parent.change_tools_fun("")
+            
+            # 🆕 关键修复：失去焦点并停止事件传播
+            self.clearFocus()
+            e.accept()  # 接受事件，阻止传播到父窗口
+            return  # 直接返回，不调用父类方法
         else:
             super().keyPressEvent(e)
 
@@ -482,7 +498,12 @@ class AutotextEdit(QTextEdit):
                         self.parent.paintlayer.update()
         super().keyReleaseEvent(e)
 
-    def _live_preview_refresh(self):
+    def _handle_text_changed(self):
+        """文本内容变化时，立即刷新预览并重置光标状态"""
+        self._cursor_visible = True
+        self._live_preview_refresh(force_cursor_visible=True)
+
+    def _live_preview_refresh(self, force_cursor_visible=False):
         """实时预览刷新"""
         try:
             if self.paint:
@@ -496,7 +517,8 @@ class AutotextEdit(QTextEdit):
         except Exception as e:
             print(f"实时预览刷新失败: {e}")
         else:
-            self._cursor_visible = True
+            if force_cursor_visible:
+                self._cursor_visible = True
 
     def _trigger_parent_redraw(self, commit=False):
         """触发父窗口重绘"""
@@ -511,8 +533,25 @@ class AutotextEdit(QTextEdit):
             print(f"提交后刷新失败: {e}")
 
     def paintEvent(self, event):
-        """覆盖原本的文字显示，实现"无输入框"视觉效果"""
-        pass
+        """绘制自定义虚线边框，保持内部透明"""
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        border_color = QColor(255, 255, 255, 180)
+        try:
+            if self.parent and hasattr(self.parent, 'pencolor'):
+                custom = QColor(self.parent.pencolor)
+                border_color = QColor(custom.red(), custom.green(), custom.blue(), 200)
+        except Exception:
+            pass
+        pen = QPen(border_color)
+        pen.setStyle(Qt.DashLine)
+        pen.setWidth(1)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        rect = self.viewport().rect().adjusted(1, 1, -1, -1)
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.end()
 
     def _toggle_cursor(self):
         """切换光标显示状态"""
@@ -545,3 +584,74 @@ class AutotextEdit(QTextEdit):
             event.accept()
         else:
             super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        """虚线框拖动起始"""
+        if event.button() == Qt.LeftButton and self._is_on_border(event.pos()):
+            self._dragging = True
+            self._drag_start_pos = QPoint(self.x(), self.y())
+            self._drag_start_global = event.globalPos()
+            if self.viewport():
+                self.viewport().setCursor(Qt.SizeAllCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """虚线框拖动过程及边缘命中提示"""
+        if self._dragging:
+            delta = event.globalPos() - self._drag_start_global
+            target = self._drag_start_pos + delta
+            target = self._clamp_to_parent(target)
+            if target != self.pos():
+                old_pos = QPoint(self.x(), self.y())
+                self.move(target)
+                self._shift_anchor(target.x() - old_pos.x(), target.y() - old_pos.y())
+                self._live_preview_refresh()
+            event.accept()
+            return
+
+        if self._is_on_border(event.pos()):
+            if self.viewport():
+                self.viewport().setCursor(Qt.SizeAllCursor)
+        else:
+            if self.viewport():
+                self.viewport().setCursor(Qt.IBeamCursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """虚线框拖动结束"""
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            if self.viewport():
+                self.viewport().setCursor(Qt.IBeamCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _is_on_border(self, pos, margin=6):
+        """判断鼠标是否落在虚线边缘区域"""
+        if not self.viewport():
+            return False
+        rect = self.viewport().rect()
+        if not rect.contains(pos):
+            return False
+        inner = rect.adjusted(margin, margin, -margin, -margin)
+        return not inner.contains(pos)
+
+    def _clamp_to_parent(self, pos):
+        """确保拖动后的文本框仍在父窗口范围内"""
+        parent = self.parent
+        if not parent:
+            return pos
+        max_x = max(0, parent.width() - self.width())
+        max_y = max(0, parent.height() - self.height())
+        clamped_x = max(0, min(pos.x(), max_x))
+        clamped_y = max(0, min(pos.y(), max_y))
+        return QPoint(clamped_x, clamped_y)
+
+    def _shift_anchor(self, dx, dy):
+        """拖动虚线框时同步更新文字绘制锚点"""
+        if hasattr(self, '_anchor_base') and isinstance(self._anchor_base, tuple):
+            ax, ay = self._anchor_base
+            self._anchor_base = (ax + dx, ay + dy)
