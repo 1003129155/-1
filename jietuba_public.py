@@ -83,12 +83,14 @@ def get_apppath():
 
 
 def get_screenshot_save_dir():
-    """获取截图保存目录 - 桌面上的スクショ文件夹"""
+    """获取截图保存目录 - 支持从配置读取自定义路径"""
     try:
-        # 获取用户桌面路径
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        # 创建スクショ文件夹
-        screenshot_dir = os.path.join(desktop_path, "スクショ")
+        from PyQt5.QtCore import QSettings
+        settings = QSettings('Fandes', 'jietuba')
+        
+        # 从配置读取保存路径
+        default_path = os.path.join(os.path.expanduser("~"), "Desktop", "スクショ")
+        screenshot_dir = settings.value('screenshot/save_path', default_path, type=str)
         
         # 确保目录存在
         if not os.path.exists(screenshot_dir):
