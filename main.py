@@ -484,6 +484,32 @@ class ConfigManager:
     def set_log_dir(self, directory):
         """设置日志保存目录"""
         self.settings.setValue('log/directory', directory)
+    
+    def get_screenshot_save_enabled(self):
+        """获取是否保存截图的开关状态"""
+        return self.settings.value('screenshot/save_enabled', True, type=bool)
+    
+    def set_screenshot_save_enabled(self, enabled):
+        """设置是否保存截图的开关状态"""
+        self.settings.setValue('screenshot/save_enabled', enabled)
+    
+    def get_screenshot_save_path(self):
+        """获取截图保存路径"""
+        # 默认路径为桌面上的スクショ文件夹
+        default_path = os.path.join(os.path.expanduser("~"), "Desktop", "スクショ")
+        return self.settings.value('screenshot/save_path', default_path, type=str)
+    
+    def set_screenshot_save_path(self, path):
+        """设置截图保存路径"""
+        self.settings.setValue('screenshot/save_path', path)
+    
+    def get_show_main_window(self):
+        """获取是否显示主界面的开关状态"""
+        return self.settings.value('ui/show_main_window', True, type=bool)
+    
+    def set_show_main_window(self, enabled):
+        """设置是否显示主界面的开关状态"""
+        self.settings.setValue('ui/show_main_window', enabled)
 
 
 class MainWindow(QMainWindow):
@@ -981,7 +1007,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.08 | 更新日: 2025.11/27")
+        self.version_label = QLabel("バージョン: 1.10 | 更新日: 2025.12/03")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
@@ -1378,7 +1404,13 @@ def main():
     
     # 创建主窗口
     window = MainWindow()
-    window.show()
+    
+    # 根据配置决定是否显示主窗口
+    if window.config_manager.get_show_main_window():
+        window.show()
+        print("✅ 主窗口已显示")
+    else:
+        print("ℹ️ 后台启动模式，主窗口未显示")
     
     print("jietuba启动完成")
     
