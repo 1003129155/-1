@@ -62,9 +62,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 使用新的截图保存目录（桌面上的スクショ文件夹）
         self.screenshot_save_dir = get_screenshot_save_dir()
         
-        # 为了兼容性，仍然创建j_temp目录（用于临时文件）
-        if not os.path.exists("j_temp"):
-            os.mkdir("j_temp")
         # self.pixmap()=QPixmap()
         # 立即初始化选区相关状态，防止在 setup/init_parameters 之前被事件访问
         self.selection_active = False
@@ -1841,13 +1838,18 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             filename = f"長スクショ{direction_suffix}_{timestamp}.png"
             filepath = os.path.join(self.screenshot_save_dir, filename)
             
-            try:
-                # 使用PIL保存，质量更好
-                result_image.save(filepath, 'PNG', optimize=True)
-                print(f"💾 长截图已保存: {filepath}")
-            except Exception as save_error:
-                print(f"⚠️ 保存长截图文件失败: {save_error}")
-                # 即使保存失败，也继续复制到剪贴板
+            # 检查是否启用了自动保存
+            should_save = self.parent.config_manager.get_screenshot_save_enabled()
+            if should_save:
+                try:
+                    # 使用PIL保存，质量更好
+                    result_image.save(filepath, 'PNG', optimize=True)
+                    print(f"💾 长截图已保存: {filepath}")
+                except Exception as save_error:
+                    print(f"⚠️ 保存长截图文件失败: {save_error}")
+                    # 即使保存失败，也继续复制到剪贴板
+            else:
+                print("ℹ️ 自动保存已禁用，长截图未保存到文件")
             
             # 复制到剪贴板
             clipboard = QApplication.clipboard()
@@ -2062,39 +2064,43 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         print(f"💡 钉图窗口已有裁剪后的备份（占用更小），主窗口资源可安全释放")
 
         
-        # 在创建钉图窗口时自动保存图片到桌面上的スクショ文件夹
-        try:
-            timestamp = time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())
-            filename = f"pinned_{timestamp}.png"
-            save_path = os.path.join(self.screenshot_save_dir, filename)
-            
-            # 如果有绘画层内容，需要合并后保存
-            if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
-                # 创建合并图像
-                merged_img = QPixmap(self.final_get_img.size())
-                merged_img.fill(Qt.transparent)
+        # 在创建钉图窗口时根据配置决定是否自动保存图片
+        should_save = self.parent.config_manager.get_screenshot_save_enabled()
+        if should_save:
+            try:
+                timestamp = time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())
+                filename = f"pinned_{timestamp}.png"
+                save_path = os.path.join(self.screenshot_save_dir, filename)
                 
-                painter = QPainter(merged_img)
-                painter.setRenderHint(QPainter.Antialiasing)
-                # 先绘制原图
-                painter.drawPixmap(0, 0, self.final_get_img)
-                # 再绘制绘画层
-                painter.drawPixmap(0, 0, self.paintlayer.pixmap())
-                painter.end()
+                # 如果有绘画层内容，需要合并后保存
+                if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
+                    # 创建合并图像
+                    merged_img = QPixmap(self.final_get_img.size())
+                    merged_img.fill(Qt.transparent)
+                    
+                    painter = QPainter(merged_img)
+                    painter.setRenderHint(QPainter.Antialiasing)
+                    # 先绘制原图
+                    painter.drawPixmap(0, 0, self.final_get_img)
+                    # 再绘制绘画层
+                    painter.drawPixmap(0, 0, self.paintlayer.pixmap())
+                    painter.end()
+                    
+                    success = merged_img.save(save_path, "PNG")
+                else:
+                    # 没有绘画层，直接保存原图
+                    success = self.final_get_img.save(save_path, "PNG")
                 
-                success = merged_img.save(save_path, "PNG")
-            else:
-                # 没有绘画层，直接保存原图
-                success = self.final_get_img.save(save_path, "PNG")
-            
-            if success:
-                print(f"✅ 钉图窗口已自动保存到: {save_path}")
-                # 移除了已保存提示
-            else:
-                print(f"❌ 钉图窗口保存失败: {save_path}")
-                
-        except Exception as e:
-            print(f"❌ 钉图窗口自动保存出错: {e}")
+                if success:
+                    print(f"✅ 钉图窗口已自动保存到: {save_path}")
+                    # 移除了已保存提示
+                else:
+                    print(f"❌ 钉图窗口保存失败: {save_path}")
+                    
+            except Exception as e:
+                print(f"❌ 钉图窗口自动保存出错: {e}")
+        else:
+            print("ℹ️ 自动保存已禁用，钉图窗口内容未保存到文件")
         
         self.parent.freeze_imgs.append(freezer)
         # 设置标志表示刚刚创建了钉图窗口，main.py中的_on_screenshot_end会检查这个标志
@@ -2446,13 +2452,18 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     self.parent.show()
         else:
             def save():
-                CONFIG_DICT["last_pic_save_name"]="{}".format( str(time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())))
-                # 使用新的保存目录（桌面上的スクショ文件夹）
-                filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
-                self.final_get_img.save(filepath)
-                if self.mode == "screenshot":
-                    self.screen_shot_result_signal.emit(filepath)
-                print(f'截图已保存到: {filepath}')
+                # 检查是否启用了自动保存
+                should_save = self.parent.config_manager.get_screenshot_save_enabled()
+                if should_save:
+                    CONFIG_DICT["last_pic_save_name"]="{}".format( str(time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())))
+                    # 使用新的保存目录（桌面上的スクショ文件夹）
+                    filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
+                    self.final_get_img.save(filepath)
+                    if self.mode == "screenshot":
+                        self.screen_shot_result_signal.emit(filepath)
+                    print(f'截图已保存到: {filepath}')
+                else:
+                    print('ℹ️ 自动保存已禁用，截图未保存到文件')
 
             self.save_data_thread = Commen_Thread(save)
             self.save_data_thread.start()
@@ -2474,16 +2485,23 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     print('sava 图像数据')
                     # 移除了图像数据已复制到剪切板提示
                 elif self.parent.settings.value('screenshot/copy_type_ss', '图像数据', type=str) == '图像文件':
-                    if hasattr(self, 'save_data_thread'):
-                        self.save_data_thread.wait()
-                    data = QMimeData()
-                    # 使用新的保存路径
-                    filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
-                    url = QUrl.fromLocalFile(filepath)
-                    data.setUrls([url])
-                    clipboard.setMimeData(data)
-                    print('save url {}'.format(url))
-                    # 移除了图像文件已复制到剪切板提示
+                    # 检查是否启用了自动保存
+                    should_save = self.parent.config_manager.get_screenshot_save_enabled()
+                    if should_save:
+                        if hasattr(self, 'save_data_thread'):
+                            self.save_data_thread.wait()
+                        data = QMimeData()
+                        # 使用新的保存路径
+                        filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
+                        url = QUrl.fromLocalFile(filepath)
+                        data.setUrls([url])
+                        clipboard.setMimeData(data)
+                        print('save url {}'.format(url))
+                        # 移除了图像文件已复制到剪切板提示
+                    else:
+                        # 如果未启用保存，则回退到图像数据模式
+                        clipboard.setPixmap(self.final_get_img)
+                        print('自动保存已禁用，使用图像数据模式复制到剪切板')
             except:
                 clipboard.setPixmap(self.final_get_img)
                 # 移除了图像数据已复制到剪切板提示
