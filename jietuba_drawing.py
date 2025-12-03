@@ -275,27 +275,50 @@ class UnifiedTextDrawer:
             text_box: 当前文字输入框
         """
         try:
-            if (not hasattr(parent, 'drawtext_pointlist') or
-                len(parent.drawtext_pointlist) == 0 or
-                not hasattr(parent, 'text_box') or
+            if (not hasattr(parent, 'text_box') or
                 not text_box.isVisible() or
-                getattr(text_box, 'paint', False)):  # 已进入提交阶段不再预览
+                getattr(text_box, 'paint', False)):
                 return
 
-            text = text_box.toPlainText()
-            # 允许空文本：仍显示插入符，避免用户感觉"无反应"
+            # 兼容 drawtext_pointlist 在输入过程中被意外清理的情况，必要时根据
+            # 文本框的真实位置反推绘制锚点，避免导致实时预览缺失。
+            anchor_point = None
+            if hasattr(parent, 'drawtext_pointlist') and parent.drawtext_pointlist:
+                anchor_point = parent.drawtext_pointlist[0]
+            if not anchor_point:
+                try:
+                    widget_top_left = text_box.mapToGlobal(QPoint(0, 0))
+                    mapped = target_widget.mapFromGlobal(widget_top_left)
+                    anchor_point = [mapped.x(), mapped.y()]
+                except Exception:
+                    anchor_point = [text_box.x(), text_box.y()]
 
-            pos = parent.drawtext_pointlist[0]  # 仅取坐标，不弹出
+            # 将预编辑文本插入到实时预览内容中，确保可见拼音/假名
+            if hasattr(text_box, 'compose_preview_text'):
+                text, caret_index, preedit_start, preedit_text = text_box.compose_preview_text()
+            else:
+                text = text_box.toPlainText()
+                caret_index = text_box.textCursor().position()
+                preedit_start = -1
+                preedit_text = ''
+            pos = anchor_point  # 仅取坐标，不弹出
             painter = QPainter(target_widget)
             painter.setRenderHint(QPainter.Antialiasing)
             
             # 创建字体并设置给painter
             font = QFont('', parent.tool_width)
             painter.setFont(font)
-            painter.setPen(QPen(parent.pencolor, 3, Qt.SolidLine))
+            base_pen = QPen(parent.pencolor, 3, Qt.SolidLine)
+            painter.setPen(base_pen)
             
             # 创建字体度量对象用于精确测量文字宽度（使用相同的字体）
             font_metrics = QFontMetrics(font)
+
+            def _text_width_local(content: str) -> int:
+                try:
+                    return font_metrics.horizontalAdvance(content)
+                except AttributeError:
+                    return font_metrics.width(content)
 
             lines = text.split('\n')
             line_height = parent.tool_width * 2.0
@@ -308,37 +331,57 @@ class UnifiedTextDrawer:
                 )
             base_x, base_y = text_box._anchor_base
 
-            # 获取文字输入框的实际光标位置
-            cursor_position = text_box.textCursor().position()
-            
-            # 计算光标所在的行和列
-            text_before_cursor = text[:cursor_position] if cursor_position <= len(text) else text
-            lines_before_cursor = text_before_cursor.split('\n')
-            cursor_line = len(lines_before_cursor) - 1
-            cursor_column = len(lines_before_cursor[-1]) if lines_before_cursor else 0
-            
-            # 绘制文字并记录光标位置
+            # 计算光标所在的行和列（包含预编辑字符）
+            caret_index = max(0, min(len(text), caret_index))
+            cursor_line = 0
+            cursor_column = 0
+            scanning_offset = 0
+            for i, line in enumerate(lines):
+                line_len = len(line)
+                if caret_index <= scanning_offset + line_len:
+                    cursor_line = i
+                    cursor_column = caret_index - scanning_offset
+                    break
+                scanning_offset += line_len + 1
+            else:
+                cursor_line = max(0, len(lines) - 1)
+                cursor_column = len(lines[cursor_line]) if lines else 0
+
             cursor_x = base_x
-            cursor_y = base_y
-            
+            cursor_y = base_y + cursor_line * line_height
+
+            preedit_end = preedit_start + len(preedit_text) if preedit_start >= 0 else -1
+            line_offset = 0
             for i, line in enumerate(lines):
                 y = base_y + i * line_height
-                if line.strip():
-                    painter.drawText(base_x, y, line)
-                
-                # 如果这是光标所在的行，使用精确的文字宽度计算光标位置
+                painter.setPen(base_pen)
+                painter.drawText(base_x, y, line)
+
+                # 预编辑文本使用虚线下划线高亮，帮助用户区分候选状态
+                if preedit_text and preedit_start >= 0:
+                    line_start = line_offset
+                    line_end = line_start + len(line)
+                    overlap_start = max(preedit_start, line_start)
+                    overlap_end = min(preedit_end, line_end)
+                    if overlap_start < overlap_end:
+                        prefix = line[:overlap_start - line_start]
+                        highlight = line[overlap_start - line_start: overlap_end - line_start]
+                        prefix_width = _text_width_local(prefix)
+                        highlight_width = _text_width_local(highlight)
+                        underline_y = y + font_metrics.descent() + 2
+                        highlight_pen = QPen(QColor(parent.pencolor).lighter(140), max(1, parent.tool_width // 6))
+                        highlight_pen.setStyle(Qt.DashLine)
+                        painter.setPen(highlight_pen)
+                        painter.drawLine(int(base_x + prefix_width), int(underline_y),
+                                         int(base_x + prefix_width + highlight_width), int(underline_y))
+                        painter.setPen(base_pen)
+
                 if i == cursor_line:
-                    # 计算光标前的文字部分的实际宽度
                     text_before_cursor_in_line = line[:cursor_column] if cursor_column <= len(line) else line
-                    # 使用兼容的宽度测量方法
-                    try:
-                        # PyQt5 5.11+ 支持 horizontalAdvance
-                        text_width = font_metrics.horizontalAdvance(text_before_cursor_in_line)
-                    except AttributeError:
-                        # 较老版本使用 width 方法
-                        text_width = font_metrics.width(text_before_cursor_in_line)
-                    cursor_x = base_x + text_width
+                    cursor_x = base_x + _text_width_local(text_before_cursor_in_line)
                     cursor_y = y
+
+                line_offset += len(line) + 1
 
             # 绘制插入符（光标），需要 text_box 维护 _cursor_visible
             if hasattr(text_box, '_cursor_visible') and text_box._cursor_visible:
