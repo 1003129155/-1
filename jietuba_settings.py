@@ -157,7 +157,9 @@ class SettingsDialog(QDialog):
         self.content_stack.addWidget(self._create_hotkey_page())         # 0
         self.content_stack.addWidget(self._create_long_screenshot_page())# 1
         self.content_stack.addWidget(self._create_smart_selection_page())# 2
-        self.content_stack.addWidget(self._create_log_page())            # 3
+        self.content_stack.addWidget(self._create_screenshot_save_page())# 3
+        self.content_stack.addWidget(self._create_log_page())            # 4
+        self.content_stack.addWidget(self._create_misc_page())           # 5
         right_layout.addWidget(self.content_stack)
         
         # 底部按钮栏
@@ -204,7 +206,9 @@ class SettingsDialog(QDialog):
             "⌨️  ショートカット",
             "📸  長いスクショ",
             "🎯  スマート選択",
-            "📝  ログ設定"
+            "💾  スクショ保存",
+            "📝  ログ設定",
+            "⚙️  その他"
         ]
         for t in items:
             nav_list.addItem(t)
@@ -452,6 +456,79 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _create_screenshot_save_page(self):
+        """创建截图保存设置页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(15)
+
+        card = SettingCard()
+
+        # 保存开关
+        self.save_toggle = ToggleSwitch()
+        row_save = self._create_toggle_row(
+            "スクショを自動保存",
+            "キャプチャ時にファイルとして自動保存します。",
+            self.config_manager.get_screenshot_save_enabled(),
+            self.save_toggle
+        )
+        card.layout.addLayout(row_save)
+        card.layout.addWidget(HLine())
+
+        # 保存路径显示
+        path_layout = QHBoxLayout()
+        current_dir = self.config_manager.get_screenshot_save_path()
+        self.save_path_lbl = QLabel(current_dir)
+        self.save_path_lbl.setStyleSheet("color: #576B95;")  # 仿链接色
+        self.save_path_lbl.setCursor(Qt.PointingHandCursor)
+        self.save_path_lbl.setWordWrap(True)
+        
+        lbl_title = QLabel("保存フォルダ:")
+        path_layout.addWidget(lbl_title)
+        path_layout.addWidget(self.save_path_lbl)
+        card.layout.addLayout(path_layout)
+        
+        card.layout.addWidget(HLine())
+
+        # 按钮组
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        btn_style = """
+            QPushButton {
+                background-color: #F2F2F2;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                color: #333;
+            }
+            QPushButton:hover { background-color: #E6E6E6; }
+        """
+        
+        btn_change = QPushButton("変更")
+        btn_change.setStyleSheet(btn_style)
+        btn_change.clicked.connect(self._change_save_dir)
+        
+        btn_open = QPushButton("開く")
+        btn_open.setStyleSheet(btn_style)
+        btn_open.clicked.connect(self._open_save_dir)
+        
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_change)
+        btn_layout.addWidget(btn_open)
+        
+        card.layout.addLayout(btn_layout)
+        layout.addWidget(card)
+        
+        # 提示信息
+        info_lbl = QLabel("💡 ヒント: 自動保存をオフにしても、クリップボードにコピーされます。")
+        info_lbl.setStyleSheet("color: #888; padding: 5px;")
+        layout.addWidget(info_lbl)
+        
+        layout.addStretch()
+        return page
+
     def _create_log_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -517,6 +594,35 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _create_misc_page(self):
+        """创建杂项设置页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(15)
+
+        card = SettingCard()
+
+        # 主界面显示开关
+        self.show_main_window_toggle = ToggleSwitch()
+        row_show = self._create_toggle_row(
+            "起動時にメインウィンドウを表示",
+            "オフにすると、バックグラウンドで起動します。",
+            self.config_manager.get_show_main_window(),
+            self.show_main_window_toggle
+        )
+        card.layout.addLayout(row_show)
+        
+        layout.addWidget(card)
+        
+        # 提示信息
+        info_lbl = QLabel("💡 ヒント: バックグラウンド起動でも、タスクトレイから操作できます。")
+        info_lbl.setStyleSheet("color: #888; padding: 5px;")
+        layout.addWidget(info_lbl)
+        
+        layout.addStretch()
+        return page
+
     # ================= 底部按钮 =================
 
     def _create_button_area(self):
@@ -559,10 +665,33 @@ class SettingsDialog(QDialog):
     # ================= 逻辑处理 =================
 
     def _on_nav_changed(self, index):
-        title_map = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "ログ設定"]
+        title_map = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "スクショ保存設定", "ログ設定", "その他設定"]
         if 0 <= index < len(title_map):
             self.content_title.setText(title_map[index])
             self.content_stack.setCurrentIndex(index)
+
+    def _change_save_dir(self):
+        """更改截图保存目录"""
+        new_dir = QFileDialog.getExistingDirectory(self, "スクショ保存フォルダを選択", self.config_manager.get_screenshot_save_path())
+        if new_dir:
+            # 保存到配置
+            self.config_manager.set_screenshot_save_path(new_dir)
+            # 更新界面显示
+            self.save_path_lbl.setText(new_dir)
+            # 显示成功消息
+            QMessageBox.information(self, "成功", f"スクショ保存フォルダが変更されました:\n{new_dir}")
+
+    def _open_save_dir(self):
+        """打开截图保存目录"""
+        path = self.config_manager.get_screenshot_save_path()
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+        if platform.system() == "Windows":
+            os.startfile(path)
+        elif platform.system() == "Darwin":
+            os.system(f"open {path}")
+        else:
+            os.system(f"xdg-open {path}")
 
     def _change_log_dir(self):
         """更改日志目录"""
@@ -592,7 +721,7 @@ class SettingsDialog(QDialog):
     def _reset_current_page(self):
         """重置当前页面的设置为默认值"""
         current_index = self.content_stack.currentIndex()
-        page_names = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "ログ設定"]
+        page_names = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "スクショ保存設定", "ログ設定", "その他設定"]
         
         # 根据当前页面重置不同的设置
         if current_index == 0:  # 快捷键设置页面
@@ -601,8 +730,12 @@ class SettingsDialog(QDialog):
             self._reset_long_screenshot_page()
         elif current_index == 2:  # 智能选择页面
             self._reset_smart_selection_page()
-        elif current_index == 3:  # 日志设置页面
+        elif current_index == 3:  # 截图保存设置页面
+            self._reset_screenshot_save_page()
+        elif current_index == 4:  # 日志设置页面
             self._reset_log_page()
+        elif current_index == 5:  # 杂项设置页面
+            self._reset_misc_page()
         
  
     
@@ -622,6 +755,13 @@ class SettingsDialog(QDialog):
         """重置智能选择页面"""
         self.smart_toggle.setChecked(False)
     
+    def _reset_screenshot_save_page(self):
+        """重置截图保存设置页面"""
+        self.save_toggle.setChecked(True)
+        # 重置保存路径为默认值
+        default_path = os.path.join(os.path.expanduser("~"), "Desktop", "スクショ")
+        self.save_path_lbl.setText(default_path)
+    
     def _reset_log_page(self):
         """重置日志设置页面"""
         self.log_toggle.setChecked(True)
@@ -629,6 +769,10 @@ class SettingsDialog(QDialog):
         from pathlib import Path
         default = str(Path.home() / ".jietuba" / "logs")
         self.path_lbl.setText(default)
+    
+    def _reset_misc_page(self):
+        """重置杂项设置页面"""
+        self.show_main_window_toggle.setChecked(True)
 
     def accept(self):
         """保存所有设置"""
@@ -637,12 +781,20 @@ class SettingsDialog(QDialog):
         self.config_manager.set_smart_selection(self.smart_toggle.isChecked())
         self.config_manager.set_log_enabled(self.log_toggle.isChecked())
         
-        # 2. 引擎和长截图参数
+        # 2. 截图保存设置
+        self.config_manager.set_screenshot_save_enabled(self.save_toggle.isChecked())
+        # 保存路径从标签读取（如果用户修改过）
+        self.config_manager.set_screenshot_save_path(self.save_path_lbl.text())
+        
+        # 3. 杂项设置
+        self.config_manager.set_show_main_window(self.show_main_window_toggle.isChecked())
+        
+        # 4. 引擎和长截图参数
         self.config_manager.set_long_stitch_engine(self.engine_combo.currentData())
         self.config_manager.set_long_stitch_debug(self.debug_toggle.isChecked())
         self.config_manager.settings.setValue('screenshot/scroll_cooldown', self.cooldown_spinbox.value())
         
-        # 3. Rust 参数
+        # 5. Rust 参数
         for key, spinbox in self.spinboxes.items():
             val = spinbox.value()
             self.config_manager.settings.setValue(f'screenshot/{key}', val)
@@ -680,6 +832,12 @@ if __name__ == "__main__":
         def set_long_stitch_engine(self, v): pass
         def get_long_stitch_debug(self): return False
         def set_long_stitch_debug(self, v): pass
+        def get_screenshot_save_enabled(self): return True
+        def set_screenshot_save_enabled(self, v): pass
+        def get_screenshot_save_path(self): return os.path.join(os.path.expanduser("~"), "Desktop", "スクショ")
+        def set_screenshot_save_path(self, v): pass
+        def get_show_main_window(self): return True
+        def set_show_main_window(self, v): pass
 
     app = QApplication(sys.argv)
     font = QFont("Microsoft YaHei", 9)
