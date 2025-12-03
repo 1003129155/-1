@@ -14,7 +14,7 @@ import win32gui
 import win32api
 import win32con
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPoint
-from PyQt5.QtGui import QFont, QColor, QCursor, QPainter, QPen
+from PyQt5.QtGui import QFont, QColor, QCursor, QPainter, QPen, QInputMethodEvent
 from PyQt5.QtWidgets import QPushButton, QGroupBox, QTextEdit, QFrame
 
 # ================== 多屏调试开关 ==================
@@ -438,6 +438,8 @@ class AutotextEdit(QTextEdit):
         self._dragging = False
         self._drag_start_pos = QPoint()
         self._drag_start_global = QPoint()
+        self._preedit_text = ""
+        self._preedit_cursor_pos = 0
 
     def textAreaChanged(self, minsize=0):
         """根据文本内容自动调整大小"""
@@ -455,6 +457,8 @@ class AutotextEdit(QTextEdit):
         if hasattr(self, '_anchor_base'):
             delattr(self, '_anchor_base')
         self.paint = False
+        self._preedit_text = ""
+        self._preedit_cursor_pos = 0
 
     def keyPressEvent(self, e):
         """处理按键事件"""
@@ -497,6 +501,29 @@ class AutotextEdit(QTextEdit):
                     if hasattr(self.parent, 'paintlayer'):
                         self.parent.paintlayer.update()
         super().keyReleaseEvent(e)
+
+    def inputMethodEvent(self, event):
+        """跟踪输入法预编辑文本，便于在预览层展示拼音/候选字符"""
+        if event is not None:
+            try:
+                self._preedit_text = event.preeditString() or ""
+                self._preedit_cursor_pos = 0
+                for attr in event.attributes() or []:
+                    if attr.type == QInputMethodEvent.Cursor:
+                        self._preedit_cursor_pos = attr.start
+                        break
+            except Exception:
+                self._preedit_text = event.preeditString() or ""
+                self._preedit_cursor_pos = 0
+        super().inputMethodEvent(event)
+        if not self._preedit_text:
+            self._preedit_cursor_pos = 0
+        self._live_preview_refresh(force_cursor_visible=True)
+
+    def focusOutEvent(self, event):
+        self._preedit_text = ""
+        self._preedit_cursor_pos = 0
+        super().focusOutEvent(event)
 
     def _handle_text_changed(self):
         """文本内容变化时，立即刷新预览并重置光标状态"""
@@ -638,6 +665,20 @@ class AutotextEdit(QTextEdit):
             return False
         inner = rect.adjusted(margin, margin, -margin, -margin)
         return not inner.contains(pos)
+
+    def compose_preview_text(self):
+        """返回与输入法预编辑合并后的文本及光标信息"""
+        base_text = self.toPlainText()
+        cursor_pos = self.textCursor().position()
+        preedit = getattr(self, '_preedit_text', '') or ''
+        combined = base_text
+        preedit_start = cursor_pos if preedit else -1
+        if preedit:
+            combined = base_text[:cursor_pos] + preedit + base_text[cursor_pos:]
+        caret_index = cursor_pos
+        if preedit:
+            caret_index = preedit_start + min(max(0, self._preedit_cursor_pos), len(preedit))
+        return combined, caret_index, preedit_start, preedit
 
     def _clamp_to_parent(self, pos):
         """确保拖动后的文本框仍在父窗口范围内"""
