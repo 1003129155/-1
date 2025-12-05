@@ -14,6 +14,8 @@ jietuba_widgets.py - 自定义控件模块
 jietuba_public, jietuba_resource, jietuba_text_drawer
 """
 import os
+import time
+from typing import Tuple
 import jietuba_resource
 from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QUrl, QTimer, QSize, QPoint, QRectF
 from PyQt5.QtGui import QTextCursor, QMouseEvent, QCursor, QKeyEvent
@@ -549,6 +551,7 @@ class Freezer(QLabel):
         
         # 初始化DPI记录
         self.initialize_dpi_tracking()
+        self._last_dpi_check_at = 0.0
         
         # === 创建绘画层，完全照搬截图窗口的逻辑 ===
         self.paintlayer = PinnedPaintLayer(self, self.main_window)
@@ -587,7 +590,7 @@ class Freezer(QLabel):
         self.is_drawing_drag = False  # 添加绘画拖拽标志
         self.on_top = True
         self.p_x = self.p_y = 0
-        self.setToolTip("Ctrl+ホイールで透明度調整")
+        self.setToolTip("ホイールで大きさ調整")
         # self.setMaximumSize(QApplication.desktop().size())
         self.timer = QTimer(self)  # 创建一个定时器
         self.timer.setInterval(200)  # 设置定时器的时间间隔为200ms
@@ -1423,7 +1426,32 @@ class Freezer(QLabel):
                     QApplication.processEvents()
 
             self.update()
+    def _clamp_position_to_virtual_desktop(self, x: int, y: int) -> Tuple[int, int]:
+        """将窗口位置限制在虚拟桌面范围内，防止移动到极端坐标。"""
+        screens = QApplication.screens()
+        if not screens:
+            return int(x), int(y)
+
+        margin = 200  # 允许适度超出屏幕边缘，避免看起来被“吸附”
+        left = min(screen.geometry().x() for screen in screens) - margin
+        top = min(screen.geometry().y() for screen in screens) - margin
+        right = max(screen.geometry().x() + screen.geometry().width() for screen in screens) + margin
+        bottom = max(screen.geometry().y() + screen.geometry().height() for screen in screens) + margin
+
+        max_x = right - self.width()
+        max_y = bottom - self.height()
+        if max_x < left:
+            max_x = left
+        if max_y < top:
+            max_y = top
+
+        clamped_x = max(left, min(int(x), max_x))
+        clamped_y = max(top, min(int(y), max_y))
+        if (clamped_x != int(x) or clamped_y != int(y)) and not getattr(self, '_suppress_move_debug', False):
+            print(f"⚠️ 钉图窗口位置越界: 请求=({x},{y}) -> 调整为=({clamped_x},{clamped_y})")
+        return clamped_x, clamped_y
     def move(self,x,y):
+        x, y = self._clamp_position_to_virtual_desktop(x, y)
         super().move(x,y)
         
         # 避免在DPI调整过程中的递归调用
@@ -1486,6 +1514,13 @@ class Freezer(QLabel):
             # 如果正在调整中，避免重复触发
             if getattr(self, '_adjusting_dpi', False):
                 return
+
+            # 节流：最多每0.5秒检查一次
+            now = time.monotonic()
+            last_check = getattr(self, '_last_dpi_check_at', 0.0)
+            if now - last_check < 0.5:
+                return
+            self._last_dpi_check_at = now
                 
             # 获取当前显示器
             screens = QApplication.screens()
@@ -1729,6 +1764,10 @@ class Freezer(QLabel):
                 self.setCursor(Qt.SizeAllCursor)
                 self.drag = True
                 self.p_x, self.p_y = event.x(), event.y()
+                try:
+                    self._drag_offset = event.globalPos() - self.pos()
+                except Exception:
+                    self._drag_offset = QPoint(self.p_x, self.p_y)
             # self.resize(self.width()/2,self.height()/2)
             # self.setPixmap(self.pixmap().scaled(self.pixmap().width()/2,self.pixmap().height()/2))
 
@@ -1803,7 +1842,12 @@ class Freezer(QLabel):
             
         if self.isVisible():
             if self.drag:
-                self.move(event.x() + self.x() - self.p_x, event.y() + self.y() - self.p_y)
+                if hasattr(self, '_drag_offset') and isinstance(self._drag_offset, QPoint):
+                    global_pos = event.globalPos()
+                    new_pos = global_pos - self._drag_offset
+                    self.move(new_pos.x(), new_pos.y())
+                else:
+                    self.move(event.x() + self.x() - self.p_x, event.y() + self.y() - self.p_y)
                 # 拖拽移动时检查DPI变化
                 self.check_and_adjust_for_dpi_change()
             elif self.resize_the_window:

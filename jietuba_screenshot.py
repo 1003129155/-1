@@ -2451,25 +2451,15 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 if hasattr(self.parent, '_was_visible') and self.parent._was_visible:
                     self.parent.show()
         else:
-            def save():
-                # 检查是否启用了自动保存
-                should_save = self.parent.config_manager.get_screenshot_save_enabled()
-                if should_save:
-                    CONFIG_DICT["last_pic_save_name"]="{}".format( str(time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime())))
-                    # 使用新的保存目录（桌面上的スクショ文件夹）
-                    filepath = os.path.join(self.screenshot_save_dir, '{}.png'.format(CONFIG_DICT["last_pic_save_name"]))
-                    self.final_get_img.save(filepath)
-                    if self.mode == "screenshot":
-                        self.screen_shot_result_signal.emit(filepath)
-                    print(f'截图已保存到: {filepath}')
-                else:
-                    print('ℹ️ 自动保存已禁用，截图未保存到文件')
-
-            self.save_data_thread = Commen_Thread(save)
-            self.save_data_thread.start()
-            st = time.process_time()
-            self.manage_data()
-            print('managetime:', time.process_time() - st)
+            # 异步处理保存和剪贴板，不阻塞UI
+            if hasattr(self.parent, 'handle_screenshot_completion'):
+                self.parent.handle_screenshot_completion(self.final_get_img)
+            
+            # 发送截图完成信号（用于显示结果窗口等）
+            if self.mode == "screenshot":
+                if not QSettings('Fandes', 'jietuba').value("S_SIMPLE_MODE", False, bool):
+                    self.screen_shot_end_show_sinal.emit(self.final_get_img)
+                    
         self.clear_and_hide()
 
     def manage_data(self):

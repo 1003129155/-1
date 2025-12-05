@@ -555,7 +555,7 @@ class ScrollCaptureWindow(QWidget):
         self.last_scroll_time = 0  # 最后一次滚动的时间戳
         # 从配置读取滚动冷却时间
         settings = QSettings('Fandes', 'jietuba')
-        self.scroll_cooldown = settings.value('screenshot/scroll_cooldown', 0.17, type=float)
+        self.scroll_cooldown = settings.value('screenshot/scroll_cooldown', 0.12, type=float)
         self.capture_mode = "immediate"  # 截图模式: "immediate"立即 或 "wait"等待停止
         
         # 去重相关

@@ -39,7 +39,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QDialog, QFormLayout, QLineEdit
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPen, QBrush
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot, QAbstractNativeEventFilter, QSettings, QRect, QPoint
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot, QAbstractNativeEventFilter, QSettings, QRect, QPoint, QUrl, QMimeData, QThread
 
 # 导入截图核心功能
 from jietuba_screenshot import Slabel
@@ -512,6 +512,26 @@ class ConfigManager:
         self.settings.setValue('ui/show_main_window', enabled)
 
 
+class SaveThread(QThread):
+    """后台保存截图线程"""
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, image, path):
+        super().__init__()
+        self.image = image
+        self.path = path
+
+    def run(self):
+        try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            # 保存图像
+            self.image.save(self.path)
+            self.finished_signal.emit(True, self.path)
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+
+
 class MainWindow(QMainWindow):
     """主窗口"""
     screenshot_signal = pyqtSignal()
@@ -562,6 +582,9 @@ class MainWindow(QMainWindow):
 
         # 标记程序是否真正退出
         self.really_quit = False
+        
+        # 保存线程列表，防止被垃圾回收
+        self.save_threads = []
 
 
         # 预加载设置对话框（延迟创建，避免阻塞启动）
@@ -1071,6 +1094,71 @@ class MainWindow(QMainWindow):
     def _update_hotkey_display(self):
         """更新快捷键显示"""
         self.hotkey_label.setText(f"ショートカット: {self.current_hotkey}")
+
+    def handle_screenshot_completion(self, pixmap):
+        """处理截图完成后的保存和剪贴板操作（异步，不阻塞UI）"""
+        # 1. 获取配置
+        should_save = self.config_manager.get_screenshot_save_enabled()
+        copy_type = self.config_manager.settings.value('screenshot/copy_type_ss', '图像数据', type=str)
+        save_dir = self.config_manager.get_screenshot_save_path()
+        
+        # 特殊情况处理：如果选了复制文件但禁用了保存，则回退到复制图像数据
+        if copy_type == '图像文件' and not should_save:
+            copy_type = '图像数据'
+            print("ℹ️ [主线程] 选了复制文件但禁用了保存，回退到复制图像数据")
+        
+        # 2. 立即处理图像数据复制 (最常用，优先处理)
+        if copy_type == '图像数据':
+            QApplication.clipboard().setPixmap(pixmap)
+            print("📋 [主线程] 图像数据已复制到剪贴板")
+
+        # 3. 准备保存 (如果需要保存 或 需要复制文件路径)
+        # 注意：如果 copy_type 是 '图像文件'，则必须保存文件才能复制路径
+        need_save = should_save or (copy_type == '图像文件')
+        
+        if not need_save:
+            return
+
+        # 生成文件名
+        timestamp = str(time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime()))
+        CONFIG_DICT["last_pic_save_name"] = timestamp
+        filename = "{}.png".format(timestamp)
+        filepath = os.path.join(save_dir, filename)
+        
+        # 转换 QPixmap 为 QImage 以便在线程中使用 (QPixmap 不是线程安全的)
+        image = pixmap.toImage()
+        
+        # 创建并启动保存线程
+        thread = SaveThread(image, filepath)
+        
+        # 定义回调闭包
+        def on_save_finished(success, result):
+            if success:
+                path = result
+                print(f"💾 [后台] 截图已保存: {path}")
+                
+                # 如果需要复制文件路径
+                if copy_type == '图像文件':
+                    data = QMimeData()
+                    url = QUrl.fromLocalFile(path)
+                    data.setUrls([url])
+                    QApplication.clipboard().setMimeData(data)
+                    print(f"📋 [主线程] 图像文件路径已复制到剪贴板: {url}")
+                
+                # 发送截图结果信号（如果需要）
+                # 注意：这里无法直接访问 Slabel 实例，因为它可能已经被销毁
+                # 如果有其他组件依赖 screen_shot_result_signal，需要在这里处理
+            else:
+                print(f"❌ [后台] 保存截图失败: {result}")
+            
+            # 清理线程引用
+            if thread in self.save_threads:
+                self.save_threads.remove(thread)
+                
+        thread.finished_signal.connect(on_save_finished)
+        self.save_threads.append(thread)
+        thread.start()
+        print(f"🚀 [主线程] 已启动后台保存线程: {filepath}")
 
     def start_screenshot(self):
         """开始截图"""
