@@ -360,7 +360,7 @@ class SettingsDialog(QDialog):
         self.cooldown_spinbox.setSingleStep(0.01)
         self.cooldown_spinbox.setDecimals(2)
         self.cooldown_spinbox.setValue(
-            self.config_manager.settings.value('screenshot/scroll_cooldown', 0.17, type=float)
+            self.config_manager.settings.value('screenshot/scroll_cooldown', 0.15, type=float)
         )
         self.cooldown_spinbox.setFixedWidth(100)
         self.cooldown_spinbox.setStyleSheet(self._get_input_style())
@@ -748,7 +748,7 @@ class SettingsDialog(QDialog):
         """重置长截图设置页面"""
         self.engine_combo.setCurrentIndex(0)  # rust
         self.debug_toggle.setChecked(False)
-        self.cooldown_spinbox.setValue(0.17)  # 默认滚动冷却时间
+        self.cooldown_spinbox.setValue(0.15)  # 默认滚动冷却时间
         # 高级参数已隐藏，无需重置
     
     def _reset_smart_selection_page(self):
