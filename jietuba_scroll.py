@@ -555,7 +555,7 @@ class ScrollCaptureWindow(QWidget):
         self.last_scroll_time = 0  # 最后一次滚动的时间戳
         # 从配置读取滚动冷却时间
         settings = QSettings('Fandes', 'jietuba')
-        self.scroll_cooldown = settings.value('screenshot/scroll_cooldown', 0.17, type=float)
+        self.scroll_cooldown = settings.value('screenshot/scroll_cooldown', 0.15, type=float)
         self.capture_mode = "immediate"  # 截图模式: "immediate"立即 或 "wait"等待停止
         
         # 去重相关
@@ -1202,10 +1202,14 @@ class ScrollCaptureWindow(QWidget):
         
         if self.capture_mode == "immediate":
             # 立即截图模式：延迟很短时间后截图（让滚动动画完成）
+            # 横向模式需要额外增加0.15秒延迟
+            delay = self.scroll_cooldown
+            if self.scroll_direction == "horizontal":
+                delay += 0.15
             if self.capture_timer.isActive():
                 self.capture_timer.stop()
-            self.capture_timer.start(int(self.scroll_cooldown * 1000))  # 默认300ms
-            print(f"⚡ 检测到滚动，累积距离: {self.current_scroll_distance}px，{self.scroll_cooldown}秒后截图...")
+            self.capture_timer.start(int(delay * 1000))
+            print(f"⚡ 检测到滚动，累积距离: {self.current_scroll_distance}px，{delay}秒后截图...")
         else:
             # 等待停止模式：启动检测定时器
             if not self.scroll_check_timer.isActive():
