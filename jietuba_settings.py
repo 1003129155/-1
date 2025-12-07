@@ -612,6 +612,19 @@ class SettingsDialog(QDialog):
             self.show_main_window_toggle
         )
         card.layout.addLayout(row_show)
+
+        card.layout.addWidget(HLine())
+
+        # 钉图工具栏自动显示
+        self.pin_auto_toolbar_toggle = ToggleSwitch()
+        row_pin_toolbar = self._create_toggle_row( 
+            "ピン留めで描画ツールを自動表示",
+            "オン: マウスがピン留めウィンドウに入るとツールバーを表示します。\n"
+            "オフ: 右クリックでツールバーボタンで表示します。",
+            self.config_manager.get_pinned_auto_toolbar(),
+            self.pin_auto_toolbar_toggle
+        )
+        card.layout.addLayout(row_pin_toolbar)
         
         layout.addWidget(card)
         
@@ -773,6 +786,7 @@ class SettingsDialog(QDialog):
     def _reset_misc_page(self):
         """重置杂项设置页面"""
         self.show_main_window_toggle.setChecked(True)
+        self.pin_auto_toolbar_toggle.setChecked(True)
 
     def accept(self):
         """保存所有设置"""
@@ -788,6 +802,7 @@ class SettingsDialog(QDialog):
         
         # 3. 杂项设置
         self.config_manager.set_show_main_window(self.show_main_window_toggle.isChecked())
+        self.config_manager.set_pinned_auto_toolbar(self.pin_auto_toolbar_toggle.isChecked())
         
         # 4. 引擎和长截图参数
         self.config_manager.set_long_stitch_engine(self.engine_combo.currentData())

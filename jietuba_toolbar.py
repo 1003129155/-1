@@ -23,7 +23,7 @@ class ToolbarManager:
     
     def init_slabel_ui(self):
         """初始化界面的参数"""
-        self.setToolTip("左クリックで選択、右クリックで戻る")
+        self.setToolTip("右クリックでキャンセル")
 
         # 使用左右分布布局：左侧吸附其他按钮，右侧吸附钉图和确定按钮
         btn_width = 45  # 调整按钮宽度（原35）
@@ -61,6 +61,10 @@ class ToolbarManager:
         self.drawarrow.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
         
+        # 序号工具
+        self.drawnumber.setGeometry(left_btn_x, 0, btn_width, btn_height)
+        left_btn_x += btn_width
+        
         # 矩形工具
         self.bs.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
@@ -71,10 +75,6 @@ class ToolbarManager:
         
         # 文字工具
         self.drawtext.setGeometry(left_btn_x, 0, btn_width, btn_height)
-        left_btn_x += btn_width
-        
-        # 颜色选择
-        self.choice_clor_btn.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
         
         # 上一步
@@ -157,6 +157,11 @@ class ToolbarManager:
         self.drawarrow.setIconSize(QSize(32, 32))  # 设置图标大小
         self.drawarrow.clicked.connect(self.draw_arrow_fun)
         
+        self.drawnumber.setToolTip('番号を追加 (クリックで自動採番)')
+        self.drawnumber.setIcon(QIcon(resource_path("svg/序号.svg")))
+        self.drawnumber.setIconSize(QSize(32, 32))  # 设置图标大小
+        self.drawnumber.clicked.connect(self.draw_number_fun)
+        
         self.bs.setToolTip('矩形を描画')
         self.bs.setIcon(QIcon(resource_path("svg/方框.svg")))
         self.bs.setIconSize(QSize(32, 32))  # 设置图标大小
@@ -171,13 +176,6 @@ class ToolbarManager:
         self.drawtext.setIcon(QIcon(resource_path("svg/文字.svg")))
         self.drawtext.setIconSize(QSize(32, 32))  # 设置图标大小
         self.drawtext.clicked.connect(self.drawtext_fun)
-        
-        self.choice_clor_btn.setToolTip('ペンの色を選択')
-        self.choice_clor_btn.setIcon(QIcon(resource_path("svg/颜色设置.svg")))
-        self.choice_clor_btn.setIconSize(QSize(32, 32))  # 设置图标大小
-        self.choice_clor_btn.clicked.connect(self.get_color)
-        # 移除悬停颜色菜单功能
-        # self.choice_clor_btn.hoversignal.connect(self.Color_hoveraction)
         
         self.lastbtn.setToolTip('元に戻す')
         self.lastbtn.setIcon(QIcon(resource_path("svg/撤回.svg")))
@@ -194,8 +192,8 @@ class ToolbarManager:
         
     def init_paint_tools_menu(self):
         """初始化绘画工具二级菜单"""
-        menu_width = 385  # 增加宽度以容纳大型emoji按钮
-        menu_height = 60  # 缩小高度
+        menu_width = 545  # 增加宽度以容纳更多按钮
+        menu_height = 55  # 保持高度
         
         # 设置二级菜单的大小和样式 - 白色背景
         self.paint_tools_menu.resize(menu_width, menu_height)
@@ -225,9 +223,10 @@ class ToolbarManager:
             }
         """)
         
-        # 布局调节控件
-        # 画笔大小滑动条
-        self.size_slider.setGeometry(5, 25, 80, 18)  # 缩小尺寸
+        # 布局调节控件 - 从左到右：大小调整、透明度调整、颜色自由选择按钮、预设颜色区域
+        
+        # 1. 画笔大小滑动条（左边第一组）
+        self.size_slider.setGeometry(5, 25, 80, 18)
         self.size_slider.setOrientation(Qt.Horizontal)
         self.size_slider.setToolTip('ペンのサイズを設定、マウスホイールでも調整可能')
         self.size_slider.valueChanged.connect(self.change_size_fun)
@@ -236,15 +235,15 @@ class ToolbarManager:
         self.size_slider.setMinimum(1)
         
         self.sizetextlabel.setText("大小")
-        self.sizetextlabel.setGeometry(5, 5, 30, 16)  # 缩小并重新定位
-        self.sizetextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色，在白色背景上可见
+        self.sizetextlabel.setGeometry(5, 5, 30, 16)
+        self.sizetextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         
-        self.size_slider_label.setGeometry(90, 25, 25, 18)  # 调整位置
-        self.size_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
+        self.size_slider_label.setGeometry(90, 25, 25, 18)
+        self.size_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         self.size_slider_label.setText("5")
         
-        # 透明度滑动条
-        self.alpha_slider.setGeometry(130, 25, 80, 18)  # 缩小并重新定位
+        # 2. 透明度滑动条（左边第二组）
+        self.alpha_slider.setGeometry(130, 25, 80, 18)
         self.alpha_slider.setOrientation(Qt.Horizontal)
         self.alpha_slider.setToolTip('ペンの透明度を設定、Ctrl+ホイールでも調整可能')
         self.alpha_slider.valueChanged.connect(self.change_alpha_fun)
@@ -253,18 +252,25 @@ class ToolbarManager:
         self.alpha_slider.setMinimum(1)
         
         self.alphatextlabel.setText("透明度")
-        self.alphatextlabel.setGeometry(130, 5, 50, 16)  # 缩小并重新定位
-        self.alphatextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
+        self.alphatextlabel.setGeometry(130, 5, 50, 16)
+        self.alphatextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         
-        self.alpha_slider_label.setGeometry(215, 25, 30, 18)  # 调整位置
-        self.alpha_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')  # 改为深灰色
+        self.alpha_slider_label.setGeometry(215, 25, 30, 18)
+        self.alpha_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         self.alpha_slider_label.setText("255")
         
-        # 设置3个颜色预设按钮 - 水平排列，红黄绿三色
-        preset_btn_size = 40   # 正方形按钮，更大更容易点击
-        preset_start_x = 250   # 起始位置
-        preset_y = 10          # 垂直居中位置
-        preset_spacing = 45    # 按钮间距
+        # 3. 颜色自由选择按钮（中间）
+        self.choice_clor_btn.setGeometry(255, 9, 40, 40)
+        self.choice_clor_btn.setToolTip('ペンの色を選択')
+        self.choice_clor_btn.setIcon(QIcon(resource_path("svg/颜色设置.svg")))
+        self.choice_clor_btn.setIconSize(QSize(32, 32))
+        self.choice_clor_btn.clicked.connect(self.get_color)
+        
+        # 4. 设置6个颜色预设按钮 - 水平排列（红、黄、绿、蓝、黑、白）
+        preset_btn_size = 34   # 按钮大小
+        preset_start_x = 310   # 起始位置
+        preset_y = 11          # 垂直位置
+        preset_spacing = 38    # 按钮间距
         
         # 预设1: 红色
         self.preset_btn_1.setGeometry(preset_start_x, preset_y, preset_btn_size, preset_btn_size)
@@ -284,6 +290,24 @@ class ToolbarManager:
         self.preset_btn_3.setToolTip('緑色\n#00FF00')
         self.preset_btn_3.clicked.connect(self.apply_color_preset_green)
         
+        # 预设4: 蓝色
+        self.preset_btn_4.setGeometry(preset_start_x + preset_spacing * 3, preset_y, preset_btn_size, preset_btn_size)
+        self.preset_btn_4.setText("●")
+        self.preset_btn_4.setToolTip('青色\n#0000FF')
+        self.preset_btn_4.clicked.connect(self.apply_color_preset_blue)
+        
+        # 预设5: 黑色
+        self.preset_btn_5.setGeometry(preset_start_x + preset_spacing * 4, preset_y, preset_btn_size, preset_btn_size)
+        self.preset_btn_5.setText("●")
+        self.preset_btn_5.setToolTip('黒色\n#000000')
+        self.preset_btn_5.clicked.connect(self.apply_color_preset_black)
+        
+        # 预设6: 白色
+        self.preset_btn_6.setGeometry(preset_start_x + preset_spacing * 5, preset_y, preset_btn_size, preset_btn_size)
+        self.preset_btn_6.setText("●")
+        self.preset_btn_6.setToolTip('白色\n#FFFFFF')
+        self.preset_btn_6.clicked.connect(self.apply_color_preset_white)
+        
         # 设置颜色预设按钮样式
         # 红色按钮
         red_style = """
@@ -293,7 +317,7 @@ class ToolbarManager:
                 color: rgb(139, 0, 0);
                 border: 3px solid #CC0000;
                 border-radius: 8px;
-                font-size: 24px;
+                font-size: 20px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -315,7 +339,7 @@ class ToolbarManager:
                 color: rgb(139, 139, 0);
                 border: 3px solid #CCCC00;
                 border-radius: 8px;
-                font-size: 24px;
+                font-size: 20px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -337,7 +361,7 @@ class ToolbarManager:
                 color: rgb(0, 100, 0);
                 border: 3px solid #00CC00;
                 border-radius: 8px;
-                font-size: 24px;
+                font-size: 20px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -351,9 +375,78 @@ class ToolbarManager:
             }
         """
         
+        # 蓝色按钮
+        blue_style = """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(100, 100, 255, 200), stop:1 rgba(0, 0, 255, 200));
+                color: rgb(0, 0, 139);
+                border: 3px solid #0000CC;
+                border-radius: 8px;
+                font-size: 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(120, 120, 255, 240), stop:1 rgba(30, 30, 255, 240));
+                border: 3px solid #0000FF;
+            }
+            QPushButton:pressed {
+                background: rgba(0, 0, 255, 250);
+                border: 3px solid #0000AA;
+            }
+        """
+        
+        # 黑色按钮
+        black_style = """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(80, 80, 80, 200), stop:1 rgba(0, 0, 0, 200));
+                color: rgb(200, 200, 200);
+                border: 3px solid #333333;
+                border-radius: 8px;
+                font-size: 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(100, 100, 100, 240), stop:1 rgba(30, 30, 30, 240));
+                border: 3px solid #000000;
+            }
+            QPushButton:pressed {
+                background: rgba(0, 0, 0, 250);
+                border: 3px solid #000000;
+            }
+        """
+        
+        # 白色按钮
+        white_style = """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 255, 255, 255), stop:1 rgba(230, 230, 230, 200));
+                color: rgb(100, 100, 100);
+                border: 3px solid #CCCCCC;
+                border-radius: 8px;
+                font-size: 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 255, 255, 255), stop:1 rgba(240, 240, 240, 240));
+                border: 3px solid #FFFFFF;
+            }
+            QPushButton:pressed {
+                background: rgba(220, 220, 220, 250);
+                border: 3px solid #AAAAAA;
+            }
+        """
+        
         self.preset_btn_1.setStyleSheet(red_style)
         self.preset_btn_2.setStyleSheet(yellow_style)
         self.preset_btn_3.setStyleSheet(green_style)
+        self.preset_btn_4.setStyleSheet(blue_style)
+        self.preset_btn_5.setStyleSheet(black_style)
+        self.preset_btn_6.setStyleSheet(white_style)
         
     def show_paint_tools_menu(self):
         """显示绘画工具二级菜单"""
@@ -427,7 +520,7 @@ class ToolbarManager:
         current_tool = self.get_current_tool()
         # 所有绘图工具都显示颜色预设按钮
         is_drawing_tool = current_tool in ('pen_on', 'highlight_on', 'drawarrow_on', 
-                                           'drawrect_bs_on', 'drawcircle_on', 'drawtext_on')
+                                           'drawnumber_on', 'drawrect_bs_on', 'drawcircle_on', 'drawtext_on')
         
         # 所有绘图工具都显示颜色预设按钮
         if hasattr(self, 'preset_btn_1'):
@@ -511,19 +604,25 @@ class ToolbarManager:
                             self._pinned_backup_initialized = True
                             print("钉图模式: 创建初始备份")
                     else:
-                        # 如果没有paintlayer，使用原始图像
+                        # 如果没有paintlayer，使用矢量文档渲染初始备份
                         from PyQt5.QtGui import QPixmap
-                        self.backup_pic_list = [QPixmap(pinned_window.showing_imgpix)]
+                        if hasattr(pinned_window, 'layer_document'):
+                            self.backup_pic_list = [pinned_window.layer_document.render_composited()]
+                        else:
+                            self.backup_pic_list = [QPixmap(pinned_window.pixmap())]
                         self.backup_ssid = 0
                         self._pinned_backup_initialized = True
-                        print("钉图模式: 使用原始图像创建初始备份")
+                        print("钉图模式: 使用矢量文档创建初始备份")
                     
                 # 设置选择区域为整个钉图窗口
                 self.x0, self.y0 = pinned_window.x(), pinned_window.y()
                 self.x1, self.y1 = pinned_window.x() + pinned_window.width(), pinned_window.y() + pinned_window.height()
                 
-                # 设置最终图像为钉图窗口的当前图像
-                self.final_get_img = pinned_window.showing_imgpix
+                # 设置最终图像为钉图窗口的当前图像（从矢量文档渲染）
+                if hasattr(pinned_window, 'layer_document'):
+                    self.final_get_img = pinned_window.layer_document.render_composited()
+                else:
+                    self.final_get_img = pinned_window.pixmap()
                 
 
                 # 这里保持内部行为不变，仅不显示该按钮。
@@ -580,7 +679,7 @@ class ToolbarManager:
         if self.copy_botton.isVisible():
             left_buttons.append((self.copy_botton, int(30 * dpi_scale)))
 
-        paint_buttons = [self.pen, self.highlighter, self.bs, self.drawcircle, self.drawtext, self.choice_clor_btn]
+        paint_buttons = [self.pen, self.highlighter, self.drawnumber, self.bs, self.drawcircle, self.drawtext]
         for btn in paint_buttons:
             if btn.isVisible():
                 left_buttons.append((btn, btn_width))
@@ -763,6 +862,8 @@ class ToolbarManager:
                     self.drawcircle.setStyleSheet("background-color:rgb(50,50,50);")
                 elif tool_name == "drawarrow_on":
                     self.drawarrow.setStyleSheet("background-color:rgb(50,50,50);")
+                elif tool_name == "drawnumber_on":
+                    self.drawnumber.setStyleSheet("background-color:rgb(50,50,50);")
                 elif tool_name == "drawtext_on":
                     self.drawtext.setStyleSheet("background-color:rgb(50,50,50);")
             else:
@@ -777,6 +878,8 @@ class ToolbarManager:
                     self.drawcircle.setStyleSheet("")
                 elif tool_name == "drawarrow_on":
                     self.drawarrow.setStyleSheet("")
+                elif tool_name == "drawnumber_on":
+                    self.drawnumber.setStyleSheet("")
                 elif tool_name == "drawtext_on":
                     self.drawtext.setStyleSheet("")
     
@@ -876,6 +979,10 @@ class ToolbarManager:
         self.drawarrow.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
         
+        # 序号工具
+        self.drawnumber.setGeometry(left_btn_x, 0, btn_width, btn_height)
+        left_btn_x += btn_width
+        
         # 矩形工具
         self.bs.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
@@ -887,11 +994,6 @@ class ToolbarManager:
         # 文字工具
         self.drawtext.setGeometry(left_btn_x, 0, btn_width, btn_height)
         left_btn_x += btn_width
-        
-        # 颜色选择
-        self.choice_clor_btn.setGeometry(left_btn_x, 0, btn_width, btn_height)
-        left_btn_x += btn_width
-
         
         # 上一步
         self.lastbtn.setGeometry(left_btn_x, 0, btn_width, btn_height)

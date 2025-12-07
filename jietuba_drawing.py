@@ -114,7 +114,7 @@ class UnifiedTextDrawer:
             return False
     
     @staticmethod
-    def process_text_drawing(parent, pixmap_painter, text_box):
+    def process_text_drawing(parent, pixmap_painter, text_box, *, vector_target=None, force_raster=False):
         """
         处理文字绘制流程（统一截图窗口和钉图窗口的逻辑）
         
@@ -190,41 +190,60 @@ class UnifiedTextDrawer:
                 text_rect = QRect(int(base_x), int(base_y - parent.tool_width), 
                                 int(max_line_width), int(total_height))
                 
-                # 绘制文字
+                handled_by_vector = False
+                font_family = ""
+                font_weight = None
+                font_italic = False
+                font_obj = None
                 try:
-                    for i, line in enumerate(lines):
-                        if line.strip():
-                            pixmap_painter.drawText(base_x, base_y + i * line_height, line)
-                except Exception as draw_error:
-                    print(f"统一文字绘制: 绘制文字时出错: {draw_error}")
-                    return False
+                    font_obj = QFont(text_box.currentFont()) if hasattr(text_box, 'currentFont') else QFont(text_box.font())
+                except Exception:
+                    font_obj = QFont()
+                font_obj.setPointSize(max(1, parent.tool_width))
+                font_family = font_obj.family()
+                font_weight = font_obj.weight()
+                font_italic = font_obj.italic()
+                vector_owner = vector_target or parent
+                if vector_owner and hasattr(vector_owner, 'record_text_command'):
+                    try:
+                        handled_by_vector = bool(
+                            vector_owner.record_text_command(
+                                anchor_point=(base_x, base_y),
+                                text=text,
+                                color=parent.pencolor,
+                                font_size=parent.tool_width,
+                                line_ratio=(line_height / max(1.0, float(parent.tool_width))),
+                                font_family=font_family,
+                                font_weight=font_weight,
+                                font_italic=font_italic,
+                            )
+                        )
+                    except Exception as vector_error:
+                        handled_by_vector = False
+                        print(f"统一文字绘制: 矢量文字记录失败，回退到栅格绘制: {vector_error}")
+
+                if force_raster:
+                    handled_by_vector = False
+
+                if not handled_by_vector:
+                    # 绘制文字
+                    try:
+                        if font_obj:
+                            pixmap_painter.setFont(font_obj)
+                        for i, line in enumerate(lines):
+                            if line.strip():
+                                pixmap_painter.drawText(base_x, base_y + i * line_height, line)
+                    except Exception as draw_error:
+                        print(f"统一文字绘制: 绘制文字时出错: {draw_error}")
+                        return False
                 
                 # 注意：不在这里结束painter，让调用方处理painter的生命周期
                 # 这样可以避免 "QPaintDevice: Cannot destroy paint device that is being painted" 错误
                 
-                # 创建撤销备份 - 特殊处理钉图窗口
-                if hasattr(parent, 'backup_shortshot'):
+                # 创建撤销备份 - 钉图窗口在record_text_command中已处理
+                if not handled_by_vector and hasattr(parent, 'backup_shortshot'):
                     try:
-                        # 判断是钉图窗口还是普通截图窗口
-                        is_pinned_window = False
-                        pinned_window = None
-                        
-                        # 检查parent的类名是否为Freezer（钉图窗口）
-                        if parent.__class__.__name__ == 'Freezer':
-                            is_pinned_window = True
-                            pinned_window = parent
-                        # 或检查是否有origin_imgpix属性（钉图窗口特有）
-                        elif hasattr(parent, 'origin_imgpix'):
-                            is_pinned_window = True
-                            pinned_window = parent
-                        
-                        if is_pinned_window and pinned_window:
-                            # 钉图窗口：先合并图层，再备份
-                            pinned_window._merge_paint_to_base()
-                            pinned_window.backup_shortshot()
-                        else:
-                            # 普通截图窗口：直接备份
-                            parent.backup_shortshot()
+                        parent.backup_shortshot()
                     except Exception as backup_error:
                         print(f"统一文字绘制: 备份时出错: {backup_error}")
                 
@@ -244,6 +263,10 @@ class UnifiedTextDrawer:
                     except Exception:
                         pass
                 
+                try:
+                    parent._last_tool_commit = 'text'
+                except Exception:
+                    pass
                 return True
             else:
                 # 空文本：清理坐标点和输入框状态，因为没有内容需要绘制
@@ -258,6 +281,11 @@ class UnifiedTextDrawer:
                 # 清除锚点信息，确保下次新建输入框时重新计算位置
                 if hasattr(text_box, '_anchor_base'):
                     delattr(text_box, '_anchor_base')
+                try:
+                    if getattr(parent, '_last_tool_commit', None) == 'text':
+                        parent._last_tool_commit = None
+                except Exception:
+                    pass
                 return False
                 
         except Exception as e:
@@ -306,7 +334,11 @@ class UnifiedTextDrawer:
             painter.setRenderHint(QPainter.Antialiasing)
             
             # 创建字体并设置给painter
-            font = QFont('', parent.tool_width)
+            try:
+                font = QFont(text_box.currentFont()) if hasattr(text_box, 'currentFont') else QFont(text_box.font())
+            except Exception:
+                font = QFont()
+            font.setPointSize(max(1, parent.tool_width))
             painter.setFont(font)
             base_pen = QPen(parent.pencolor, 3, Qt.SolidLine)
             painter.setPen(base_pen)
@@ -419,23 +451,12 @@ class MaskLayer(QLabel):
         rect = QRect(min(self.parent.x0, self.parent.x1), min(self.parent.y0, self.parent.y1),
                      abs(self.parent.x1 - self.parent.x0), abs(self.parent.y1 - self.parent.y0))
 
-        painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.SolidLine))
+        # 绘制边框 - 加粗到4像素
+        painter.setPen(QPen(QColor(64, 224, 208), 4, Qt.SolidLine))
         painter.drawRect(rect)
         painter.drawRect(0, 0, self.width(), self.height())
-        painter.setPen(QPen(QColor(48, 200, 192), 8, Qt.SolidLine))
-        painter.drawPoint(
-            QPoint(self.parent.x0, min(self.parent.y1, self.parent.y0) + abs(self.parent.y1 - self.parent.y0) // 2))
-        painter.drawPoint(
-            QPoint(min(self.parent.x1, self.parent.x0) + abs(self.parent.x1 - self.parent.x0) // 2, self.parent.y0))
-        painter.drawPoint(
-            QPoint(self.parent.x1, min(self.parent.y1, self.parent.y0) + abs(self.parent.y1 - self.parent.y0) // 2))
-        painter.drawPoint(
-            QPoint(min(self.parent.x1, self.parent.x0) + abs(self.parent.x1 - self.parent.x0) // 2, self.parent.y1))
-        painter.drawPoint(QPoint(self.parent.x0, self.parent.y0))
-        painter.drawPoint(QPoint(self.parent.x0, self.parent.y1))
-        painter.drawPoint(QPoint(self.parent.x1, self.parent.y0))
-        painter.drawPoint(QPoint(self.parent.x1, self.parent.y1))
-
+        
+        # 绘制尺寸文字
         x = y = 100
         if self.parent.x1 > self.parent.x0:
             x = self.parent.x0 + 5
@@ -449,6 +470,7 @@ class MaskLayer(QLabel):
         painter.drawText(x, y,
                          '{}x{}'.format(abs(self.parent.x1 - self.parent.x0), abs(self.parent.y1 - self.parent.y0)))
 
+        # 绘制阴影遮罩
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(0, 0, 0, 120))
         painter.drawRect(0, 0, self.width(), min(self.parent.y1, self.parent.y0))
@@ -460,6 +482,27 @@ class MaskLayer(QLabel):
         painter.drawRect(min(self.parent.x1, self.parent.x0), max(self.parent.y1, self.parent.y0),
                          max(self.parent.x1, self.parent.x0) - min(self.parent.x1, self.parent.x0),
                          self.height() - max(self.parent.y1, self.parent.y0))
+        
+        # 绘制阴影后再绘制控制点（确保控制点在最上层）
+        handle_size = 10
+        handle_positions = [
+            QPoint(self.parent.x0, min(self.parent.y1, self.parent.y0) + abs(self.parent.y1 - self.parent.y0) // 2),
+            QPoint(min(self.parent.x1, self.parent.x0) + abs(self.parent.x1 - self.parent.x0) // 2, self.parent.y0),
+            QPoint(self.parent.x1, min(self.parent.y1, self.parent.y0) + abs(self.parent.y1 - self.parent.y0) // 2),
+            QPoint(min(self.parent.x1, self.parent.x0) + abs(self.parent.x1 - self.parent.x0) // 2, self.parent.y1),
+            QPoint(self.parent.x0, self.parent.y0),
+            QPoint(self.parent.x0, self.parent.y1),
+            QPoint(self.parent.x1, self.parent.y0),
+            QPoint(self.parent.x1, self.parent.y1),
+        ]
+        
+        for pos in handle_positions:
+            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.SolidLine))
+            painter.setBrush(QColor(48, 200, 192))
+            painter.drawEllipse(pos, handle_size // 2 + 1, handle_size // 2 + 1)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(48, 200, 192))
+            painter.drawEllipse(pos, handle_size // 2, handle_size // 2)
         
         # 以下为鼠标放大镜
         if not (self.parent.painter_tools['drawcircle_on'] or
@@ -549,6 +592,89 @@ class PaintLayer(QLabel):
         self.px = self.py = -50
         self.pixPainter = None
         self._pixpainter_started_in_event = False
+        self._active_stroke = []
+        self._pending_vectors = []
+        self._current_stroke_meta = None
+
+    def force_flush_pen_points(self):
+        """强制处理待绘制的画笔点，生成矢量命令
+        
+        在备份前调用此方法，确保所有画笔点都被转换为矢量命令。
+        这是一个同步方法，会立即处理 pen_pointlist 中的所有点。
+        """
+        if not self.parent or not hasattr(self.parent, 'pen_pointlist'):
+            return
+        
+        if not self.parent.pen_pointlist:
+            return
+        
+        # 初始化 pixPainter（如果需要）
+        if not self._begin_pix_painter():
+            return
+        
+        try:
+            def get_ture_pen_alpha_color():
+                color = QColor(self.parent.pencolor)
+                if color.alpha() != 255:
+                    al = self.parent.pencolor.alpha() / (self.parent.tool_width / 2)
+                    if al > 1:
+                        color.setAlpha(al)
+                    else:
+                        color.setAlpha(1)
+                return color
+            
+            # 处理画笔点（与 paintEvent 中的逻辑相同）
+            while len(self.parent.pen_pointlist):
+                color = get_ture_pen_alpha_color()
+                pen_painter = self.pixPainter
+                pen_painter.setBrush(color)
+                pen_painter.setPen(Qt.NoPen)
+                pen_painter.setRenderHint(QPainter.Antialiasing)
+                new_pen_point = self.parent.pen_pointlist.pop(0)
+                
+                if new_pen_point[0] == -2:
+                    self._finalize_vector_stroke()
+                    self.parent.old_pen = new_pen_point
+                    continue
+                
+                if self.parent.old_pen is None:
+                    self.parent.old_pen = new_pen_point
+                    self._current_stroke_meta = (QColor(color), self.parent.tool_width, bool(self.parent.painter_tools.get('highlight_on')))
+                    self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
+                    continue
+                
+                is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+                if not self._active_stroke:
+                    self._current_stroke_meta = (QColor(color), self.parent.tool_width, is_highlight)
+                
+                self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
+                
+                if self.parent.old_pen[0] != -2 and new_pen_point[0] != -2:
+                    # 绘制（荧光笔使用正方形，普通画笔使用圆形）
+                    if is_highlight:
+                        pen_painter.drawRect(new_pen_point[0] - self.parent.tool_width / 2,
+                                           new_pen_point[1] - self.parent.tool_width / 2,
+                                           self.parent.tool_width, self.parent.tool_width)
+                    else:
+                        pen_painter.drawEllipse(new_pen_point[0] - self.parent.tool_width / 2,
+                                              new_pen_point[1] - self.parent.tool_width / 2,
+                                              self.parent.tool_width, self.parent.tool_width)
+                
+                self.parent.old_pen = new_pen_point
+            
+            # 处理完成后，将 _pending_vectors 传递给父窗口
+            if self._pending_vectors and hasattr(self.parent, 'ingest_vector_commands'):
+                payload = list(self._pending_vectors)
+                self._pending_vectors.clear()
+                try:
+                    self.parent.ingest_vector_commands(payload)
+                except Exception as e:
+                    print(f"⚠️ 矢量笔迹记录失败: {e}")
+            
+        finally:
+            if self.pixPainter and self.pixPainter.isActive():
+                self.pixPainter.end()
+            self.pixPainter = None
 
     def _begin_pix_painter(self):
         """确保 self.pixPainter 指向一个已 begin 的 QPainter"""
@@ -762,9 +888,19 @@ class PaintLayer(QLabel):
             pen_painter.setPen(Qt.NoPen)
             pen_painter.setRenderHint(QPainter.Antialiasing)
             new_pen_point = self.parent.pen_pointlist.pop(0)
-            if self.parent.old_pen is None:
+            if new_pen_point[0] == -2:
+                self._finalize_vector_stroke()
                 self.parent.old_pen = new_pen_point
                 continue
+            if self.parent.old_pen is None:
+                self.parent.old_pen = new_pen_point
+                self._current_stroke_meta = (QColor(color), self.parent.tool_width, bool(self.parent.painter_tools.get('highlight_on')))
+                self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
+                continue
+            is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+            if not self._active_stroke:
+                self._current_stroke_meta = (QColor(color), self.parent.tool_width, is_highlight)
+            self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
             if self.parent.old_pen[0] != -2 and new_pen_point[0] != -2:
                 # 荧光笔使用正方形笔刷，普通画笔使用圆形笔刷
                 if self.parent.painter_tools.get('highlight_on'):
@@ -790,14 +926,17 @@ class PaintLayer(QLabel):
                                                         y - self.parent.tool_width / 2,
                                                         self.parent.tool_width, self.parent.tool_width)
             self.parent.old_pen = new_pen_point
+        if self._pending_vectors and hasattr(self.parent, 'ingest_vector_commands'):
+            payload = list(self._pending_vectors)
+            self._pending_vectors.clear()
+            try:
+                self.parent.ingest_vector_commands(payload)
+            except Exception as e:
+                print(f"⚠️ 矢量笔迹记录失败: {e}")
             
         if base_painter:
             base_painter.end()
-            if hasattr(self.parent, 'showing_imgpix') and self.parent.pixmap():
-                try:
-                    self.parent.showing_imgpix = self.parent.pixmap().copy()
-                except Exception as sync_err:
-                    print(f"⚠️ 正片叠底同步失败: {sync_err}")
+            # 矢量系统会自动管理图像数据，不需要手动同步 showing_imgpix
             if hasattr(self.parent, 'qimg'):
                 try:
                     self.parent.qimg = self.parent.pixmap().toImage()
@@ -823,6 +962,13 @@ class PaintLayer(QLabel):
                     self.pixPainter.drawRect(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                              abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
                     self.parent.drawrect_pointlist = [[-2, -2], [-2, -2], 0]
+                    if hasattr(self.parent, 'record_rectangle_command'):
+                        self.parent.record_rectangle_command(
+                            poitlist[0][:],
+                            poitlist[1][:],
+                            self.parent.pencolor,
+                            self.parent.tool_width,
+                        )
                     print(f"矩形撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
                 except Exception as e:
@@ -846,6 +992,13 @@ class PaintLayer(QLabel):
                     self.pixPainter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                                 abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
                     self.parent.drawcircle_pointlist = [[-2, -2], [-2, -2], 0]
+                    if hasattr(self.parent, 'record_circle_command'):
+                        self.parent.record_circle_command(
+                            poitlist[0][:],
+                            poitlist[1][:],
+                            self.parent.pencolor,
+                            self.parent.tool_width,
+                        )
                     print(f"圆形撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
                 except Exception as e:
@@ -856,9 +1009,10 @@ class PaintLayer(QLabel):
             try:
                 temppainter = QPainter(self)
                 poitlist = self.parent.drawarrow_pointlist
+                pen_color = QColor(self.parent.pencolor)
                 
                 # 使用优化的箭头绘制函数
-                self._draw_optimized_arrow(temppainter, poitlist, self.parent.pencolor, self.parent.tool_width)
+                self._draw_optimized_arrow(temppainter, poitlist, pen_color, self.parent.tool_width)
                 temppainter.end()
             except Exception as e:
                 print(f"画箭头临时QPainter错误: {e}")
@@ -869,19 +1023,118 @@ class PaintLayer(QLabel):
                         raise RuntimeError('pixPainter 初始化失败，无法提交箭头')
                     
                     # 使用优化的箭头绘制函数
-                    self._draw_optimized_arrow(self.pixPainter, poitlist, self.parent.pencolor, self.parent.tool_width)
-                    
+                    self._draw_optimized_arrow(self.pixPainter, poitlist, pen_color, self.parent.tool_width)
+                    if hasattr(self.parent, 'record_arrow_command'):
+                        self.parent.record_arrow_command(
+                            poitlist[0][:],
+                            poitlist[1][:],
+                            pen_color,
+                            self.parent.tool_width,
+                        )
                     self.parent.drawarrow_pointlist = [[-2, -2], [-2, -2], 0]
                     print(f"箭头撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
                 except Exception as e:
                     print(f"画箭头pixPainter错误: {e}")
 
+        # 画序号标注工具
+        if hasattr(self.parent, 'drawnumber_pointlist') and len(self.parent.drawnumber_pointlist) >= 2:
+            if self.parent.drawnumber_pointlist[0][0] != -2:
+                # 临时预览
+                try:
+                    temppainter = QPainter(self)
+                    center_x, center_y = self.parent.drawnumber_pointlist[0]
+                    number = self.parent.drawnumber_counter
+                    pen_color = QColor(self.parent.pencolor)
+                    circle_radius = max(20, self.parent.tool_width * 1.5)
+                    
+                    # 绘制圆形背景（使用当前透明度设置）
+                    temppainter.setPen(Qt.NoPen)
+                    bg_color = QColor(pen_color)
+                    bg_color.setAlpha(self.parent.alpha)  # 使用透明度滑块的值
+                    temppainter.setBrush(bg_color)
+                    from PyQt5.QtCore import QPointF
+                    temppainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
+                    
+                    # 绘制数字
+                    font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
+                    temppainter.setFont(font)
+                    temppainter.setPen(QPen(QColor(255, 255, 255)))
+                    
+                    text = str(number)
+                    metrics = temppainter.fontMetrics()
+                    text_width = metrics.horizontalAdvance(text)
+                    text_height = metrics.height()
+                    text_x = center_x - text_width / 2
+                    text_y = center_y + text_height / 3
+                    
+                    temppainter.drawText(int(text_x), int(text_y), text)
+                    temppainter.end()
+                except Exception as e:
+                    print(f"画序号临时QPainter错误: {e}")
+                
+                # 提交到pixmap
+                if self.parent.drawnumber_pointlist[1] == 1:
+                    try:
+                        if not self._begin_pix_painter():
+                            raise RuntimeError('pixPainter 初始化失败，无法提交序号')
+                        
+                        center_x, center_y = self.parent.drawnumber_pointlist[0]
+                        number = self.parent.drawnumber_counter
+                        pen_color = QColor(self.parent.pencolor)
+                        circle_radius = max(20, self.parent.tool_width * 1.5)
+                        
+                        # 绘制圆形背景（使用当前透明度设置）
+                        self.pixPainter.setPen(Qt.NoPen)
+                        bg_color = QColor(pen_color)
+                        bg_color.setAlpha(self.parent.alpha)  # 使用透明度滑块的值
+                        self.pixPainter.setBrush(bg_color)
+                        from PyQt5.QtCore import QPointF
+                        self.pixPainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
+                        
+                        # 绘制数字
+                        font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
+                        self.pixPainter.setFont(font)
+                        self.pixPainter.setPen(QPen(QColor(255, 255, 255)))
+                        
+                        text = str(number)
+                        metrics = self.pixPainter.fontMetrics()
+                        text_width = metrics.horizontalAdvance(text)
+                        text_height = metrics.height()
+                        text_x = center_x - text_width / 2
+                        text_y = center_y + text_height / 3
+                        
+                        self.pixPainter.drawText(int(text_x), int(text_y), text)
+                        
+                        # 记录矢量命令
+                        if hasattr(self.parent, 'record_number_command'):
+                            self.parent.record_number_command(
+                                (center_x, center_y),
+                                number,
+                                QColor(255, 255, 255),  # 文字颜色（白色）
+                                pen_color,  # 背景颜色
+                                circle_radius,
+                            )
+                        
+                        # 序号自增
+                        self.parent.drawnumber_counter += 1
+                        # 重置状态
+                        self.parent.drawnumber_pointlist = [[-2, -2], 0]
+                        print(f"序号撤销调试: paintEvent中绘制完成，创建备份，下一个序号为 {self.parent.drawnumber_counter}")
+                        self.parent.backup_shortshot()
+                    except Exception as e:
+                        print(f"画序号pixPainter错误: {e}")
+
         # 文字提交阶段
         if len(self.parent.drawtext_pointlist) > 1 or self.parent.text_box.paint:
             if self.parent.text_box.paint:
                 try:
-                    UnifiedTextDrawer.process_text_drawing(self.parent, self.pixPainter, self.parent.text_box)
+                    UnifiedTextDrawer.process_text_drawing(
+                        self.parent,
+                        self.pixPainter,
+                        self.parent.text_box,
+                        force_raster=True,
+                    )
                 except Exception as e:
                     print(f"统一文字提交错误: {e}")
             else:
@@ -915,6 +1168,9 @@ class PaintLayer(QLabel):
                 UnifiedTextDrawer.render_live_preview(self, self.parent, self.parent.text_box)
         except Exception as e:
             print(f"截图实时文字预览错误: {e}")
+
+        # 选区预览与手柄绘制
+        self._draw_selection_overlay()
             
         # 清理pixPainter
         try:
@@ -926,36 +1182,63 @@ class PaintLayer(QLabel):
             print(f"pixpainter end error: {e}")
             self.pixPainter = None
 
-        # 选区预览与手柄绘制
+    def _finalize_vector_stroke(self):
+        if not self._active_stroke or not self._current_stroke_meta:
+            self._active_stroke = []
+            self._current_stroke_meta = None
+            return
+        color, width, is_highlight = self._current_stroke_meta
+        self._pending_vectors.append(
+            {
+                "type": "stroke",
+                "points": [tuple(pt) for pt in self._active_stroke],
+                "color": QColor(color),
+                "width": width,
+                "is_highlight": is_highlight,
+            }
+        )
+        self._active_stroke = []
+        self._current_stroke_meta = None
+
+    def _draw_selection_overlay(self):
+        parent = self.parent
+        if (not parent or getattr(parent, 'closed', False) or
+                not getattr(parent, 'selection_active', False)):
+            return
+        rect = getattr(parent, 'selection_rect', None)
+        if rect is None or rect.width() <= 0 or rect.height() <= 0:
+            return
+        pixmap = getattr(parent, 'selection_scaled_pixmap', None)
+        if pixmap is None:
+            pixmap = getattr(parent, 'selection_pixmap', None)
+        if pixmap is None or pixmap.isNull():
+            return
         try:
-            if hasattr(self.parent, 'selection_active') and self.parent.selection_active:
-                overlay = QPainter(self)
-                overlay.setRenderHint(QPainter.Antialiasing)
-                if getattr(self.parent, 'selection_scaled_pixmap', None) is not None:
-                    overlay.drawPixmap(self.parent.selection_rect.topLeft(), self.parent.selection_scaled_pixmap)
-                pen = QPen(QColor(0, 120, 215), 1, Qt.DashLine)
-                overlay.setPen(pen)
-                overlay.setBrush(Qt.NoBrush)
-                overlay.drawRect(self.parent.selection_rect)
-                
-                handle_size = 6
-                r = self.parent.selection_rect
-                cx = r.x() + r.width() // 2
-                cy = r.y() + r.height() // 2
-                handles = [
-                    QRect(r.left()-handle_size//2, r.top()-handle_size//2, handle_size, handle_size),
-                    QRect(cx-handle_size//2, r.top()-handle_size//2, handle_size, handle_size),
-                    QRect(r.right()-handle_size//2, r.top()-handle_size//2, handle_size, handle_size),
-                    QRect(r.left()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
-                    QRect(r.right()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
-                    QRect(r.left()-handle_size//2, r.bottom()-handle_size//2, handle_size, handle_size),
-                    QRect(cx-handle_size//2, r.bottom()-handle_size//2, handle_size, handle_size),
-                    QRect(r.right()-handle_size//2, r.bottom()-handle_size//2, handle_size, handle_size),
-                ]
-                overlay.setBrush(QBrush(QColor(0, 120, 215)))
-                for h in handles:
-                    overlay.drawRect(h)
-                overlay.end()
+            overlay = QPainter(self)
+            overlay.setRenderHint(QPainter.Antialiasing)
+            overlay.drawPixmap(rect.topLeft(), pixmap)
+            pen = QPen(QColor(0, 120, 215), 1, Qt.DashLine)
+            overlay.setPen(pen)
+            overlay.setBrush(Qt.NoBrush)
+            overlay.drawRect(rect)
+
+            handle_size = 6
+            cx = rect.x() + rect.width() // 2
+            cy = rect.y() + rect.height() // 2
+            handles = [
+                QRect(rect.left()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                QRect(cx-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                QRect(rect.right()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                QRect(rect.left()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
+                QRect(rect.right()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
+                QRect(rect.left()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+                QRect(cx-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+                QRect(rect.right()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+            ]
+            overlay.setBrush(QBrush(QColor(0, 120, 215)))
+            for handle in handles:
+                overlay.drawRect(handle)
+            overlay.end()
         except Exception as e:
             print(f"selection overlay draw error: {e}")
 

@@ -373,6 +373,7 @@ class ConfigManager:
         self.smart_selection_default = False  # 智能选择默认关闭
         self.taskbar_button_default = False  # 任务栏按钮默认关闭
         self.long_stitch_debug_default = True  # 长截图调试默认开启
+        self.pinned_auto_toolbar_default = True  # 钉图工具栏默认自动显示
     
     def get_hotkey(self):
         return self.settings.value('hotkey/global', self.hotkey_default, type=str)
@@ -510,6 +511,14 @@ class ConfigManager:
     def set_show_main_window(self, enabled):
         """设置是否显示主界面的开关状态"""
         self.settings.setValue('ui/show_main_window', enabled)
+
+    def get_pinned_auto_toolbar(self):
+        """获取钉图窗口是否自动显示工具栏的设置"""
+        return self.settings.value('pinned/auto_toolbar', self.pinned_auto_toolbar_default, type=bool)
+
+    def set_pinned_auto_toolbar(self, enabled: bool):
+        """设置钉图窗口自动显示工具栏开关"""
+        self.settings.setValue('pinned/auto_toolbar', bool(enabled))
 
 
 class SaveThread(QThread):
