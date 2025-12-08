@@ -656,7 +656,7 @@ class AutotextEdit(QTextEdit):
             return
         super().mouseReleaseEvent(event)
 
-    def _is_on_border(self, pos, margin=6):
+    def _is_on_border(self, pos, margin=24):
         """判断鼠标是否落在虚线边缘区域"""
         if not self.viewport():
             return False
@@ -681,15 +681,9 @@ class AutotextEdit(QTextEdit):
         return combined, caret_index, preedit_start, preedit
 
     def _clamp_to_parent(self, pos):
-        """确保拖动后的文本框仍在父窗口范围内"""
-        parent = self.parent
-        if not parent:
-            return pos
-        max_x = max(0, parent.width() - self.width())
-        max_y = max(0, parent.height() - self.height())
-        clamped_x = max(0, min(pos.x(), max_x))
-        clamped_y = max(0, min(pos.y(), max_y))
-        return QPoint(clamped_x, clamped_y)
+        """不限制文本框位置，允许在全显示器范围内拖动"""
+        # 直接返回目标位置，不做任何限制
+        return pos
 
     def _shift_anchor(self, dx, dy):
         """拖动虚线框时同步更新文字绘制锚点"""
