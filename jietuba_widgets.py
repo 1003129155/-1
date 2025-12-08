@@ -1867,24 +1867,31 @@ class Freezer(QLabel):
         # if has_painter_tools:
         #     print(f"绘图工具状态: {self.main_window.painter_tools}")
         
-        if (has_main_window and has_mode and is_pinned_mode and has_painter_tools and has_active_tools):
-            # print("钉图鼠标按下调试: 条件满足，开始委托事件")
-            # 有绘画工具激活时，将事件传递给主窗口处理
-            # 在钉图模式下，直接使用钉图窗口的本地坐标
-            # print(f"🎯 [钉图委托] 原始点击坐标: ({event.x()}, {event.y()})")
+        # 尝试委托给主窗口处理（无论是绘画工具还是选择操作）
+        if (has_main_window and has_mode and is_pinned_mode):
+            # 记录调用前的状态
+            was_selection_active = getattr(self.main_window, 'selection_active', False)
+            
+            # 构造委托事件
             main_event = QMouseEvent(event.type(), event.pos(), 
                                    event.globalPos(), event.button(), event.buttons(), event.modifiers())
-            # 添加标记表示这是来自钉图窗口的委托事件
             main_event._from_pinned_window = True
-            main_event._pinned_window_instance = self  # 添加当前钉图窗口引用
-            # print(f"钉图委托调试: 调用主窗口mousePressEvent，坐标=({event.x()}, {event.y()})")
+            main_event._pinned_window_instance = self
+            
+            # 调用主窗口处理
             self.main_window.mousePressEvent(main_event)
-            # 设置标志表示我们正在处理绘画拖拽
-            self.is_drawing_drag = True
-            # print(f"钉图鼠标按下调试: 设置is_drawing_drag=True")
-            # 调用父类方法以确保Qt正确跟踪鼠标状态
-            super().mousePressEvent(event)
-            return
+            
+            # 检查主窗口是否处理了该事件
+            # 1. 有激活的绘画工具
+            # 2. 进入了选区模式（选中了绘制元素）
+            # 3. 之前就是选区模式（正在调整元素）
+            is_selection_active = getattr(self.main_window, 'selection_active', False)
+            
+            if has_active_tools or is_selection_active or was_selection_active:
+                # 主窗口处理了事件，我们不再处理窗口拖动
+                self.is_drawing_drag = True
+                super().mousePressEvent(event)
+                return
             
         # print("钉图鼠标按下调试: 条件不满足，使用默认处理")
         # 重置绘画拖拽标志
@@ -2490,6 +2497,19 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理close_button时出错: {e}")
         
+        # 清理主窗口的文字输入框（如果被独立出来了）
+        # 必须在清理子控件之前执行，否则如果text_box是子控件会被误删
+        if self.main_window and hasattr(self.main_window, 'text_box'):
+            try:
+                self.main_window.text_box.hide()
+                self.main_window.text_box.clear()
+                # 如果文字框处于独立窗口状态，将其恢复为主窗口的子组件
+                self.main_window.text_box.setParent(self.main_window)
+                self.main_window.text_box.setWindowFlags(Qt.Widget)
+                print(f"🧹 [内存清理] 主窗口文字框已重置")
+            except Exception as e:
+                print(f"⚠️ 清理主窗口文字框时出错: {e}")
+
         # 清理所有可能的子控件
         for child in self.findChildren(QWidget):
             try:
@@ -2504,18 +2524,6 @@ class Freezer(QLabel):
             print(f"🧹 [内存清理] Qt事件已处理，待删除对象已清理")
         except Exception as e:
             print(f"⚠️ 处理Qt事件时出错: {e}")
-        
-        # 清理主窗口的文字输入框（如果被独立出来了）
-        if self.main_window and hasattr(self.main_window, 'text_box'):
-            try:
-                self.main_window.text_box.hide()
-                self.main_window.text_box.clear()
-                # 如果文字框处于独立窗口状态，将其恢复为主窗口的子组件
-                self.main_window.text_box.setParent(self.main_window)
-                self.main_window.text_box.setWindowFlags(Qt.Widget)
-                print(f"🧹 [内存清理] 主窗口文字框已重置")
-            except Exception as e:
-                print(f"⚠️ 清理主窗口文字框时出错: {e}")
         
         # 清理主窗口的绘画数据列表 - 防止累积
         if self.main_window:
