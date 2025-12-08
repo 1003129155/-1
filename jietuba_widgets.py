@@ -213,10 +213,16 @@ class PinnedPaintLayer(QLabel):
             color = QColor(self.main_window.pencolor)
             color.setAlpha(255)
 
-            width = self.main_window.tool_width
+            # 针对序号工具使用特殊的大小计算（与截图窗口一致）
+            if self.main_window.painter_tools.get('drawnumber_on'):
+                # 序号工具的圆圈大小应该与实际绘制的标号圆形一致
+                circle_radius = max(10, self.main_window.tool_width * 1.5)
+                width = circle_radius * 2  # 直径 = 半径 * 2
+            else:
+                width = self.main_window.tool_width
+            
             painter.setPen(QPen(color, 1, Qt.SolidLine))
-            rect = QRectF(self.px - width // 2, self.py - width // 2,
-                          width, width)
+            rect = QRectF(self.px - width / 2, self.py - width / 2, width, width)
             painter.drawEllipse(rect)  # 画鼠标圆
             painter.end()
         
@@ -413,7 +419,7 @@ class PinnedPaintLayer(QLabel):
                     center_x, center_y = self.main_window.drawnumber_pointlist[0]
                     number = self.main_window.drawnumber_counter
                     pen_color = QColor(self.main_window.pencolor)
-                    circle_radius = max(20, self.main_window.tool_width * 1.5)
+                    circle_radius = max(10, self.main_window.tool_width * 1.5)
                     
                     # 绘制圆形背景（使用当前透明度设置）
                     temppainter.setPen(Qt.NoPen)
@@ -446,7 +452,7 @@ class PinnedPaintLayer(QLabel):
                         center_x, center_y = self.main_window.drawnumber_pointlist[0]
                         number = self.main_window.drawnumber_counter
                         pen_color = QColor(self.main_window.pencolor)
-                        circle_radius = max(20, self.main_window.tool_width * 1.5)
+                        circle_radius = max(10, self.main_window.tool_width * 1.5)
                         
                         # 绘制圆形背景（使用当前透明度设置）
                         self.pixPainter.setPen(Qt.NoPen)

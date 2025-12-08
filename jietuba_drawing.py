@@ -508,6 +508,7 @@ class MaskLayer(QLabel):
         if not (self.parent.painter_tools['drawcircle_on'] or
                 self.parent.painter_tools['drawrect_bs_on'] or
                 self.parent.painter_tools['drawarrow_on'] or
+                self.parent.painter_tools['drawnumber_on'] or
                 self.parent.painter_tools['pen_on'] or
                 self.parent.painter_tools['highlight_on'] or
                 self.parent.painter_tools['drawtext_on'] or
@@ -523,10 +524,16 @@ class MaskLayer(QLabel):
             else:
                 enlarge_box_y = self.parent.mouse_posy + 20
             enlarge_rect = QRect(enlarge_box_x, enlarge_box_y, 120, 120)
-            painter.setPen(QPen(QColor(64, 224, 208), 1, Qt.SolidLine))
+            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.SolidLine))
             painter.drawRect(enlarge_rect)
-            painter.setBrush(QBrush(QColor(80, 80, 80, 180)))
-            painter.drawRect(QRect(enlarge_box_x, enlarge_box_y - 60, 160, 60))
+            
+            # 优化：绘制更美观的信息背景框
+            info_box_height = 75  # 增加高度以容纳更大字体
+            info_box_width = 150  # 增加宽度
+            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.SolidLine))  # 加边框
+            painter.setBrush(QBrush(QColor(40, 40, 45, 220)))  # 更深的背景，更高透明度
+            painter.drawRoundedRect(QRect(enlarge_box_x, enlarge_box_y - info_box_height, 
+                                         info_box_width, info_box_height), 5, 5)  # 圆角矩形
             painter.setBrush(Qt.NoBrush)
 
             # 安全获取像素颜色
@@ -550,13 +557,22 @@ class MaskLayer(QLabel):
             h, s, v, _ = color.getHsv()
             HSV_color = [h, s, v]
 
-            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.SolidLine))
-            painter.drawText(enlarge_box_x, enlarge_box_y - 8,
-                             ' POS:({},{}) '.format(self.parent.mouse_posx, self.parent.mouse_posy))
-            painter.drawText(enlarge_box_x, enlarge_box_y - 24,
-                             " HSV:({},{},{})".format(HSV_color[0], HSV_color[1], HSV_color[2]))
-            painter.drawText(enlarge_box_x, enlarge_box_y - 40,
-                             " RGB:({},{},{})".format(RGB_color[0], RGB_color[1], RGB_color[2]))
+            # 优化：使用更大的字体和更好的布局
+            font = QFont('Microsoft YaHei', 10, QFont.Bold)  # 微软雅黑，10号，加粗
+            painter.setFont(font)
+            
+            # 使用渐变色文字效果
+            painter.setPen(QPen(QColor(100, 240, 220), 2, Qt.SolidLine))  # 青色文字
+            painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 20,
+                             'POS: ({}, {})'.format(self.parent.mouse_posx, self.parent.mouse_posy))
+            
+            painter.setPen(QPen(QColor(255, 200, 100), 2, Qt.SolidLine))  # 橙黄色文字
+            painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 42,
+                             'RGB: ({}, {}, {})'.format(RGB_color[0], RGB_color[1], RGB_color[2]))
+            
+            painter.setPen(QPen(QColor(200, 150, 255), 2, Qt.SolidLine))  # 紫色文字
+            painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 64,
+                             'HSV: ({}, {}, {})'.format(HSV_color[0], HSV_color[1], HSV_color[2]))
 
             try:
                 painter.setCompositionMode(QPainter.CompositionMode_Source)
@@ -832,9 +848,17 @@ class PaintLayer(QLabel):
             painter = QPainter(self)
             color = QColor(self.parent.pencolor)
             color.setAlpha(255)
-            width = self.parent.tool_width
+            
+            # 针对序号工具使用特殊的大小计算
+            if self.parent.painter_tools.get('drawnumber_on'):
+                # 序号工具的圆圈大小应该与实际绘制的标号圆形一致
+                circle_radius = max(10, self.parent.tool_width * 1.5)
+                width = circle_radius * 2  # 直径 = 半径 * 2
+            else:
+                width = self.parent.tool_width
+            
             painter.setPen(QPen(color, 1, Qt.SolidLine))
-            rect = QRectF(self.px - width // 2, self.py - width // 2, width, width)
+            rect = QRectF(self.px - width / 2, self.py - width / 2, width, width)
             painter.drawEllipse(rect)
             painter.end()
             
@@ -1046,7 +1070,7 @@ class PaintLayer(QLabel):
                     center_x, center_y = self.parent.drawnumber_pointlist[0]
                     number = self.parent.drawnumber_counter
                     pen_color = QColor(self.parent.pencolor)
-                    circle_radius = max(20, self.parent.tool_width * 1.5)
+                    circle_radius = max(10, self.parent.tool_width * 1.5)
                     
                     # 绘制圆形背景（使用当前透明度设置）
                     temppainter.setPen(Qt.NoPen)
@@ -1082,7 +1106,7 @@ class PaintLayer(QLabel):
                         center_x, center_y = self.parent.drawnumber_pointlist[0]
                         number = self.parent.drawnumber_counter
                         pen_color = QColor(self.parent.pencolor)
-                        circle_radius = max(20, self.parent.tool_width * 1.5)
+                        circle_radius = max(10, self.parent.tool_width * 1.5)
                         
                         # 绘制圆形背景（使用当前透明度设置）
                         self.pixPainter.setPen(Qt.NoPen)
