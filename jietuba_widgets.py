@@ -14,12 +14,15 @@ jietuba_widgets.py - 自定义控件模块
 jietuba_public, jietuba_resource, jietuba_text_drawer
 """
 import os
+import time
+from typing import Dict, List, Tuple, Sequence, Optional
 import jietuba_resource
-from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QUrl, QTimer, QSize, QPoint, QRectF
+from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QUrl, QTimer, QSize, QPoint, QRect, QRectF
 from PyQt5.QtGui import QTextCursor, QMouseEvent, QCursor, QKeyEvent
 from PyQt5.QtGui import QPainter, QPen, QIcon, QFont, QImage, QPixmap, QColor, QMovie, QPolygon, QBrush
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QTextEdit, QWidget, QHBoxLayout, QVBoxLayout, QFileDialog, QMenu
 from jietuba_public import linelabel,TipsShower, get_screenshot_save_dir
+from jietuba_layer_system import VectorLayerDocument
 
 class Hung_widget(QLabel):
     button_signal = pyqtSignal(str)
@@ -121,6 +124,9 @@ class PinnedPaintLayer(QLabel):
         pix.fill(Qt.transparent)
         self.setPixmap(pix)
         self.pixPainter = None
+        self._active_stroke: List[List[int]] = []
+        self._pending_vectors: List[Dict] = []
+        self._current_stroke_meta = None
         # 设置鼠标追踪，让paintlayer接收所有鼠标事件，然后透传给父窗口
         self.setMouseTracking(True)
 
@@ -231,19 +237,19 @@ class PinnedPaintLayer(QLabel):
                     color.setAlpha(1)
             return color
 
-        base_painter = None
-        base_pixmap = None
-        target_label = getattr(self, '_parent_widget', None)
-        if (self.main_window.painter_tools.get('highlight_on') and target_label and
-                hasattr(target_label, 'pixmap')):
-            base_pixmap = target_label.pixmap()
-            if base_pixmap and not base_pixmap.isNull():
-                base_painter = QPainter(base_pixmap)
-                base_painter.setRenderHint(QPainter.Antialiasing)
-                base_painter.setCompositionMode(QPainter.CompositionMode_Multiply)
-
-        while len(self.main_window.pen_pointlist):  # 画笔工具
+        while len(self.main_window.pen_pointlist):
             color = get_ture_pen_alpha_color()
+            pen_width = self.main_window.tool_width
+            is_highlight = bool(self.main_window.painter_tools.get('highlight_on'))
+            
+            # 荧光笔模式：创建base_painter并设置正片叠底混合模式（与截图窗口一致）
+            base_painter = None
+            if is_highlight:
+                base_pixmap = self._parent_widget.pixmap()
+                if base_pixmap and not base_pixmap.isNull():
+                    base_painter = QPainter(base_pixmap)
+                    base_painter.setCompositionMode(QPainter.CompositionMode_Multiply)
+            
             pen_painter = base_painter if base_painter else self.pixPainter
             if not pen_painter:
                 break
@@ -251,49 +257,62 @@ class PinnedPaintLayer(QLabel):
             pen_painter.setPen(Qt.NoPen)
             pen_painter.setRenderHint(QPainter.Antialiasing)
             new_pen_point = self.main_window.pen_pointlist.pop(0)
-            if self.main_window.old_pen is None:
+            if new_pen_point[0] == -2:
+                self._finalize_vector_stroke()
                 self.main_window.old_pen = new_pen_point
                 continue
-            if self.main_window.old_pen[0] != -2 and new_pen_point[0] != -2:
-                # 荧光笔使用正方形笔刷，普通画笔使用圆形笔刷
-                if self.main_window.painter_tools.get('highlight_on'):
-                    pen_painter.drawRect(new_pen_point[0] - self.main_window.tool_width / 2,
-                                         new_pen_point[1] - self.main_window.tool_width / 2,
-                                         self.main_window.tool_width, self.main_window.tool_width)
+
+            if not self._active_stroke:
+                self._current_stroke_meta = (QColor(color), pen_width, is_highlight)
+            self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
+
+            if self.main_window.old_pen is None or self.main_window.old_pen[0] == -2:
+                self.main_window.old_pen = new_pen_point
+                if is_highlight:
+                    pen_painter.drawRect(new_pen_point[0] - pen_width / 2,
+                                         new_pen_point[1] - pen_width / 2,
+                                         pen_width, pen_width)
                 else:
-                    pen_painter.drawEllipse(new_pen_point[0] - self.main_window.tool_width / 2,
-                                            new_pen_point[1] - self.main_window.tool_width / 2,
-                                            self.main_window.tool_width, self.main_window.tool_width)
+                    pen_painter.drawEllipse(new_pen_point[0] - pen_width / 2,
+                                            new_pen_point[1] - pen_width / 2,
+                                            pen_width, pen_width)
+                continue
+
+            if self.main_window.old_pen[0] != -2:
+                if is_highlight:
+                    pen_painter.drawRect(new_pen_point[0] - pen_width / 2,
+                                         new_pen_point[1] - pen_width / 2,
+                                         pen_width, pen_width)
+                else:
+                    pen_painter.drawEllipse(new_pen_point[0] - pen_width / 2,
+                                            new_pen_point[1] - pen_width / 2,
+                                            pen_width, pen_width)
                 if abs(new_pen_point[0] - self.main_window.old_pen[0]) > 1 or abs(
                         new_pen_point[1] - self.main_window.old_pen[1]) > 1:
-                    # 这里需要导入get_line_interpolation函数
                     from jietuba_screenshot import get_line_interpolation
                     interpolateposs = get_line_interpolation(new_pen_point[:], self.main_window.old_pen[:])
                     if interpolateposs is not None:
                         for pos in interpolateposs:
                             x, y = pos
-                            # 荧光笔使用正方形笔刷，普通画笔使用圆形笔刷
-                            if self.main_window.painter_tools.get('highlight_on'):
-                                pen_painter.drawRect(x - self.main_window.tool_width / 2,
-                                                     y - self.main_window.tool_width / 2,
-                                                     self.main_window.tool_width, self.main_window.tool_width)
+                            if is_highlight:
+                                pen_painter.drawRect(x - pen_width / 2,
+                                                     y - pen_width / 2,
+                                                     pen_width, pen_width)
                             else:
-                                pen_painter.drawEllipse(x - self.main_window.tool_width / 2,
-                                                        y - self.main_window.tool_width / 2,
-                                                        self.main_window.tool_width, self.main_window.tool_width)
+                                pen_painter.drawEllipse(x - pen_width / 2,
+                                                        y - pen_width / 2,
+                                                        pen_width, pen_width)
 
             self.main_window.old_pen = new_pen_point
-
-        if base_painter:
+        
+        # 清理 base_painter（如果创建了的话）
+        if 'base_painter' in locals() and base_painter is not None:
             base_painter.end()
-            if base_pixmap:
-                try:
-                    target_label.setPixmap(base_pixmap)
-                    if hasattr(target_label, 'showing_imgpix'):
-                        target_label.showing_imgpix = base_pixmap.copy()
-                    target_label.update()
-                except Exception as sync_err:
-                    print(f"⚠️ 钉图荧光笔同步失败: {sync_err}")
+
+        if self._pending_vectors and hasattr(self._parent_widget, 'ingest_vector_commands'):
+            payload = list(self._pending_vectors)
+            self._pending_vectors.clear()
+            self._parent_widget.ingest_vector_commands(payload)
 
         # 处理矩形工具
         if self.main_window.drawrect_pointlist[0][0] != -2 and self.main_window.drawrect_pointlist[1][0] != -2:
@@ -309,24 +328,16 @@ class PinnedPaintLayer(QLabel):
                 
             if self.main_window.drawrect_pointlist[2] == 1:
                 try:
+                    start_pt = poitlist[0][:]
+                    end_pt = poitlist[1][:]
                     self.pixPainter.setPen(QPen(self.main_window.pencolor, self.main_window.tool_width, Qt.SolidLine))
-                    self.pixPainter.drawRect(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
-                                             abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
+                    self.pixPainter.drawRect(min(start_pt[0], end_pt[0]), min(start_pt[1], end_pt[1]),
+                                             abs(start_pt[0] - end_pt[0]), abs(start_pt[1] - end_pt[1]))
                     self.main_window.drawrect_pointlist = [[-2, -2], [-2, -2], 0]
-                    
-                    # 钉图矩形绘制完成后，合并到底图并创建备份
-                    print(f"钉图矩形撤销调试: paintEvent中绘制完成，合并到底图")
-                    print(f"钉图矩形撤销调试: _parent_widget类型: {type(self._parent_widget)}")
-                    if hasattr(self._parent_widget, '_merge_paint_to_base'):
-                        print(f"钉图矩形撤销调试: 调用_merge_paint_to_base()")
-                        self._parent_widget._merge_paint_to_base()
-                    else:
-                        print(f"钉图矩形撤销调试: _merge_paint_to_base方法不存在")
-                    if hasattr(self._parent_widget, 'backup_shortshot'):
-                        print(f"钉图矩形撤销调试: 调用backup_shortshot()")
-                        self._parent_widget.backup_shortshot()
-                    else:
-                        print(f"钉图矩形撤销调试: backup_shortshot方法不存在")
+                    if hasattr(self._parent_widget, 'record_rectangle_command'):
+                        self._parent_widget.record_rectangle_command(start_pt, end_pt,
+                                                                    self.main_window.pencolor,
+                                                                    self.main_window.tool_width)
                 except Exception as e:
                     print(f"钉图画矩形pixPainter错误: {e}")
 
@@ -344,24 +355,16 @@ class PinnedPaintLayer(QLabel):
                 
             if self.main_window.drawcircle_pointlist[2] == 1:
                 try:
+                    start_pt = poitlist[0][:]
+                    end_pt = poitlist[1][:]
                     self.pixPainter.setPen(QPen(self.main_window.pencolor, self.main_window.tool_width, Qt.SolidLine))
-                    self.pixPainter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
-                                                abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
+                    self.pixPainter.drawEllipse(min(start_pt[0], end_pt[0]), min(start_pt[1], end_pt[1]),
+                                                abs(start_pt[0] - end_pt[0]), abs(start_pt[1] - end_pt[1]))
                     self.main_window.drawcircle_pointlist = [[-2, -2], [-2, -2], 0]
-                    
-                    # 钉图圆形绘制完成后，合并到底图并创建备份
-                    print(f"钉图圆形撤销调试: paintEvent中绘制完成，合并到底图")
-                    print(f"钉图圆形撤销调试: _parent_widget类型: {type(self._parent_widget)}")
-                    if hasattr(self._parent_widget, '_merge_paint_to_base'):
-                        print(f"钉图圆形撤销调试: 调用_merge_paint_to_base()")
-                        self._parent_widget._merge_paint_to_base()
-                    else:
-                        print(f"钉图圆形撤销调试: _merge_paint_to_base方法不存在")
-                    if hasattr(self._parent_widget, 'backup_shortshot'):
-                        print(f"钉图圆形撤销调试: 调用backup_shortshot()")
-                        self._parent_widget.backup_shortshot()
-                    else:
-                        print(f"钉图圆形撤销调试: backup_shortshot方法不存在")
+                    if hasattr(self._parent_widget, 'record_circle_command'):
+                        self._parent_widget.record_circle_command(start_pt, end_pt,
+                                                                  self.main_window.pencolor,
+                                                                  self.main_window.tool_width)
                 except Exception as e:
                     print(f"钉图画圆pixPainter错误: {e}")
 
@@ -391,56 +394,121 @@ class PinnedPaintLayer(QLabel):
                     
                     # 绘制箭头到像素图
                     self.draw_arrow(self.pixPainter, self.main_window.drawarrow_pointlist)
+                    start_pt = self.main_window.drawarrow_pointlist[0][:]
+                    end_pt = self.main_window.drawarrow_pointlist[1][:]
                     self.main_window.drawarrow_pointlist = [[-2, -2], [-2, -2], 0]
-                    
-                    # 钉图箭头绘制完成后，合并到底图并创建备份
-                    print(f"钉图箭头撤销调试: paintEvent中绘制完成，合并到底图")
-                    print(f"钉图箭头撤销调试: _parent_widget类型: {type(self._parent_widget)}")
-                    if hasattr(self._parent_widget, '_merge_paint_to_base'):
-                        print(f"钉图箭头撤销调试: 调用_merge_paint_to_base()")
-                        self._parent_widget._merge_paint_to_base()
-                    else:
-                        print(f"钉图箭头撤销调试: _merge_paint_to_base方法不存在")
-                    if hasattr(self._parent_widget, 'backup_shortshot'):
-                        print(f"钉图箭头撤销调试: 调用backup_shortshot()")
-                        self._parent_widget.backup_shortshot()
-                    else:
-                        print(f"钉图箭头撤销调试: backup_shortshot方法不存在")
+                    if hasattr(self._parent_widget, 'record_arrow_command'):
+                        self._parent_widget.record_arrow_command(start_pt, end_pt,
+                                                                 pen_color,
+                                                                 self.main_window.tool_width)
                 except Exception as e:
                     print(f"钉图画箭头pixPainter错误: {e}")
+
+        # 处理序号工具
+        if hasattr(self.main_window, 'drawnumber_pointlist') and len(self.main_window.drawnumber_pointlist) >= 2:
+            if self.main_window.drawnumber_pointlist[0][0] != -2:
+                # 临时预览
+                try:
+                    temppainter = QPainter(self)
+                    center_x, center_y = self.main_window.drawnumber_pointlist[0]
+                    number = self.main_window.drawnumber_counter
+                    pen_color = QColor(self.main_window.pencolor)
+                    circle_radius = max(20, self.main_window.tool_width * 1.5)
+                    
+                    # 绘制圆形背景（使用当前透明度设置）
+                    temppainter.setPen(Qt.NoPen)
+                    bg_color = QColor(pen_color)
+                    bg_color.setAlpha(self.main_window.alpha)  # 使用透明度滑块的值
+                    temppainter.setBrush(bg_color)
+                    from PyQt5.QtCore import QPointF
+                    temppainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
+                    
+                    # 绘制数字
+                    font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
+                    temppainter.setFont(font)
+                    temppainter.setPen(QPen(QColor(255, 255, 255)))
+                    
+                    text = str(number)
+                    metrics = temppainter.fontMetrics()
+                    text_width = metrics.horizontalAdvance(text)
+                    text_height = metrics.height()
+                    text_x = center_x - text_width / 2
+                    text_y = center_y + text_height / 3
+                    
+                    temppainter.drawText(int(text_x), int(text_y), text)
+                    temppainter.end()
+                except Exception as e:
+                    print(f"钉图画序号临时QPainter错误: {e}")
+                
+                # 提交到pixmap
+                if self.main_window.drawnumber_pointlist[1] == 1:
+                    try:
+                        center_x, center_y = self.main_window.drawnumber_pointlist[0]
+                        number = self.main_window.drawnumber_counter
+                        pen_color = QColor(self.main_window.pencolor)
+                        circle_radius = max(20, self.main_window.tool_width * 1.5)
+                        
+                        # 绘制圆形背景（使用当前透明度设置）
+                        self.pixPainter.setPen(Qt.NoPen)
+                        bg_color = QColor(pen_color)
+                        bg_color.setAlpha(self.main_window.alpha)  # 使用透明度滑块的值
+                        self.pixPainter.setBrush(bg_color)
+                        from PyQt5.QtCore import QPointF
+                        self.pixPainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
+                        
+                        # 绘制数字
+                        font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
+                        self.pixPainter.setFont(font)
+                        self.pixPainter.setPen(QPen(QColor(255, 255, 255)))
+                        
+                        text = str(number)
+                        metrics = self.pixPainter.fontMetrics()
+                        text_width = metrics.horizontalAdvance(text)
+                        text_height = metrics.height()
+                        text_x = center_x - text_width / 2
+                        text_y = center_y + text_height / 3
+                        
+                        self.pixPainter.drawText(int(text_x), int(text_y), text)
+                        
+                        # 记录矢量命令
+                        if hasattr(self._parent_widget, 'record_number_command'):
+                            self._parent_widget.record_number_command(
+                                (center_x, center_y),
+                                number,
+                                QColor(255, 255, 255),  # 文字颜色（白色）
+                                pen_color,  # 背景颜色
+                                circle_radius,
+                            )
+                        
+                        # 序号自增
+                        self.main_window.drawnumber_counter += 1
+                        # 重置状态
+                        self.main_window.drawnumber_pointlist = [[-2, -2], 0]
+                        print(f"钉图序号调试: 绘制完成，下一个序号为 {self.main_window.drawnumber_counter}")
+                    except Exception as e:
+                        print(f"钉图画序号pixPainter错误: {e}")
 
         # 处理文字工具（钉图模式下的文字绘制）- 使用统一的文字绘制组件
         try:
             from jietuba_drawing import UnifiedTextDrawer
-            
+			
             if len(self.main_window.drawtext_pointlist) > 0 and hasattr(self.main_window, 'text_box') and self.main_window.text_box.paint:
                 print("钉图模式: 开始处理文字绘制")
-                
+				
                 # 使用统一的文字绘制处理
-                success = UnifiedTextDrawer.process_text_drawing(self.main_window, self.pixPainter, self.main_window.text_box)
-                
+                success = UnifiedTextDrawer.process_text_drawing(
+                    self.main_window,
+                    self.pixPainter,
+                    self.main_window.text_box,
+                    vector_target=self._parent_widget,
+                )
+				
                 if success:
                     print("钉图模式: 文字绘制完成")
-
-                    # 文字绘制完成后，立即将绘画层内容同步到底图，确保钉图窗口本身拥有最新状态
-                    try:
-                        if hasattr(self._parent_widget, '_merge_paint_to_base'):
-                            self._parent_widget._merge_paint_to_base()
-                    except Exception as merge_error:
-                        print(f"⚠️ 钉图模式: 文字合并到底图失败: {merge_error}")
-
-                    # 同步创建钉图窗口的撤销记录（独立于主窗口的备份列表）
-                    try:
-                        if hasattr(self._parent_widget, 'backup_shortshot'):
-                            self._parent_widget.backup_shortshot()
-                            print("📋 钉图模式: 文字步骤已写入撤销栈")
-                    except Exception as backup_error:
-                        print(f"⚠️ 钉图模式: 文字备份失败: {backup_error}")
-
                     self.update()
                 else:
                     print("钉图模式: 文字内容为空，不绘制")
-                    
+					
         except Exception as e:
             print(f"钉图统一文字绘制流程错误: {e}")
 
@@ -478,6 +546,24 @@ class PinnedPaintLayer(QLabel):
             
         except Exception as e:
             print(f"钉图绘制箭头错误: {e}")
+
+    def _finalize_vector_stroke(self):
+        if not self._active_stroke or not self._current_stroke_meta:
+            self._active_stroke = []
+            self._current_stroke_meta = None
+            return
+        color, width, is_highlight = self._current_stroke_meta
+        self._pending_vectors.append(
+            {
+                "type": "stroke",
+                "points": [tuple(pt) for pt in self._active_stroke],
+                "color": QColor(color),
+                "width": width,
+                "is_highlight": is_highlight,
+            }
+        )
+        self._active_stroke = []
+        self._current_stroke_meta = None
 
     def clear(self):
         """清理PinnedPaintLayer的绘画数据"""
@@ -521,14 +607,15 @@ class Freezer(QLabel):
         self.tips_shower = TipsShower(" ",(QApplication.desktop().width()//2,50,120,50))
         self.tips_shower.hide()
         
-        self.origin_imgpix = img
-        self.showing_imgpix = self.origin_imgpix
+        # 内存优化：只保留 layer_document，删除冗余的 origin_imgpix 和 showing_imgpix
+        # 底图存储在 layer_document._base_pixmap 中，需要时从 layer_document 渲染
+        self.layer_document = VectorLayerDocument(img)
         
         self.listpot = listpot
         
-        # 设置图像
-        if self.showing_imgpix and not self.showing_imgpix.isNull():
-            self.setPixmap(self.showing_imgpix)
+        # 设置图像（从 layer_document 渲染）
+        if img and not img.isNull():
+            self.setPixmap(img)
         else:
             # 如果图像无效，直接报错而不是创建无意义的空白图
             raise ValueError("钉图窗口初始化失败: 传入的图像为空或无效")
@@ -544,16 +631,17 @@ class Freezer(QLabel):
         self.setMouseTracking(True)
         self.drawRect = True
         # self.setContextMenuPolicy(Qt.CustomContextMenu)
-        if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
-            self.setGeometry(x, y, self.showing_imgpix.width(), self.showing_imgpix.height())
+        if img and not img.isNull():
+            self.setGeometry(x, y, img.width(), img.height())
         
         # 初始化DPI记录
         self.initialize_dpi_tracking()
+        self._last_dpi_check_at = 0.0
         
         # === 创建绘画层，完全照搬截图窗口的逻辑 ===
         self.paintlayer = PinnedPaintLayer(self, self.main_window)
-        if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
-            self.paintlayer.setGeometry(0, 0, self.showing_imgpix.width(), self.showing_imgpix.height())
+        if img and not img.isNull():
+            self.paintlayer.setGeometry(0, 0, img.width(), img.height())
         self.paintlayer.show()
         
         # 创建右上角的关闭按钮
@@ -585,9 +673,12 @@ class Freezer(QLabel):
         self.show()
         self.drag = self.resize_the_window = False
         self.is_drawing_drag = False  # 添加绘画拖拽标志
+        self.resize_direction = None  # 调整大小的方向
+        self.resize_start_pos = QPoint()  # 调整大小开始的位置
+        self.resize_start_geometry = QRect()  # 调整大小开始时的几何信息
         self.on_top = True
         self.p_x = self.p_y = 0
-        self.setToolTip("Ctrl+ホイールで透明度調整")
+        self.setToolTip("ホイールで大きさ調整")
         # self.setMaximumSize(QApplication.desktop().size())
         self.timer = QTimer(self)  # 创建一个定时器
         self.timer.setInterval(200)  # 设置定时器的时间间隔为200ms
@@ -608,118 +699,263 @@ class Freezer(QLabel):
         # 添加右键菜单状态标志，防止菜单显示时触发工具栏重新布局
         self._context_menu_active = False
         
-        # 初始化备份系统
+        # 初始化备份系统（改为矢量状态）
         self.backup_pic_list = []
-        self.backup_ssid = 0
-        self._original_backup_list = []  # 添加原始备份列表初始化
-        # 创建初始备份状态
-        if hasattr(self, 'showing_imgpix') and self.showing_imgpix and not self.showing_imgpix.isNull():
-            initial_backup = self.showing_imgpix.copy()
-            self.backup_pic_list.append(initial_backup)
-            self._original_backup_list.append(initial_backup.copy())  # 同时初始化原始备份列表
-            print(f"📋 钉图初始化: 创建初始备份状态，总数: {len(self.backup_pic_list)}, 原始备份: {len(self._original_backup_list)}")
-        else:
-            print("⚠️ 钉图初始化: showing_imgpix无效，将在copy_screenshot_backup_history中处理")
+        self.backup_ssid = -1
+        self._capture_history_state(initial=True)
     
-    def _merge_paint_to_base(self):
-        """将绘画层内容合并到底图，然后清空绘画层"""
+    def _is_auto_toolbar_enabled(self):
+        """读取设置，判断是否应自动显示钉图工具栏。"""
         try:
-            # 确保showing_imgpix有效
-            if not self._ensure_showing_imgpix_valid():
-                return
-            
-            if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
-                paint_pixmap = self.paintlayer.pixmap()
-                if paint_pixmap and not paint_pixmap.isNull():
-                    # 创建新的底图，合并绘画层内容
-                    new_base = QPixmap(self.showing_imgpix.size())
-                    painter = QPainter(new_base)
-                    painter.setRenderHint(QPainter.Antialiasing)
-                    
-                    # 绘制原底图
-                    painter.drawPixmap(0, 0, self.showing_imgpix)
-                    
-                    # 绘制绘画层内容
-                    painter.drawPixmap(0, 0, paint_pixmap)
-                    painter.end()
-                    
-                    # 更新底图
-                    self.showing_imgpix = new_base
-                    self.setPixmap(self.showing_imgpix)
-                    
-                    # 清空绘画层
-                    paint_pixmap.fill(Qt.transparent)
-                    self.paintlayer.update()
-                
+            slabel = getattr(self, 'main_window', None)
+            if slabel is not None:
+                host = getattr(slabel, 'parent', None)
+                config_manager = getattr(host, 'config_manager', None)
+                if config_manager is not None:
+                    return config_manager.get_pinned_auto_toolbar()
         except Exception as e:
-            print(f"❌ 钉图合并: 合并失败: {e}")
-    
-    def _ensure_showing_imgpix_valid(self):
-        """确保showing_imgpix始终有效，如果无效则从origin_imgpix恢复"""
-        # 简化条件：如果showing_imgpix不存在、为None或isNull，则尝试恢复
-        if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix or self.showing_imgpix.isNull():
-            if hasattr(self, 'origin_imgpix') and self.origin_imgpix and not self.origin_imgpix.isNull():
-                self.showing_imgpix = self.origin_imgpix.copy()
-                self.setPixmap(self.showing_imgpix)
-                return True
-            else:
-                return False
+            print(f"⚠️ 钉图工具栏设置读取失败: {e}")
         return True
-    
-    def _update_for_resize(self, new_width, new_height):
-        """缩放时更新底图和备份历史"""
-        try:
-            # 确保showing_imgpix有效
-            if not self._ensure_showing_imgpix_valid():
+
+    # ======================== 矢量绘制辅助 ========================
+    def _current_display_size(self) -> Tuple[int, int]:
+        if hasattr(self, 'paintlayer') and self.paintlayer:
+            return max(1, self.paintlayer.width()), max(1, self.paintlayer.height())
+        base = self.layer_document.base_size if hasattr(self, 'layer_document') else QSize(1, 1)
+        return max(1, base.width()), max(1, base.height())
+
+    def _normalize_point(self, point: Sequence[float]) -> Tuple[float, float]:
+        disp_w, disp_h = self._current_display_size()
+        x = 0.0 if disp_w == 0 else max(0.0, min(1.0, float(point[0]) / disp_w))
+        y = 0.0 if disp_h == 0 else max(0.0, min(1.0, float(point[1]) / disp_h))
+        return (x, y)
+
+    def _normalized_width(self, width_px: float) -> float:
+        disp_w, disp_h = self._current_display_size()
+        ref = max(1.0, float(min(disp_w, disp_h)))
+        return max(0.0, float(width_px) / ref)
+
+    def _trim_history(self, limit: int = 20) -> None:
+        if not hasattr(self, 'backup_pic_list'):
+            return
+        if len(self.backup_pic_list) <= limit:
+            return
+        overflow = len(self.backup_pic_list) - limit
+        self.backup_pic_list = self.backup_pic_list[overflow:]
+        self.backup_ssid = max(0, len(self.backup_pic_list) - 1)
+
+    def _render_for_display(self, width: int, height: int) -> Optional[QPixmap]:
+        target_size = QSize(max(1, int(width)), max(1, int(height)))
+        if hasattr(self, 'layer_document'):
+            try:
+                return self.layer_document.render_composited(target_size)
+            except Exception as e:
+                print(f"⚠️ 钉图矢量渲染失败: {e}")
+                # 回退：从 layer_document 的 base 渲染
+                try:
+                    return self.layer_document.render_base(target_size)
+                except Exception as e2:
+                    print(f"⚠️ 钉图基础渲染也失败: {e2}")
+        return None
+
+    def _capture_history_state(self, *, initial: bool = False) -> None:
+        snapshot = {
+            "mode": "vector",
+            "state": self.layer_document.export_state() if hasattr(self, 'layer_document') else [],
+        }
+        if initial or not hasattr(self, 'backup_pic_list'):
+            self.backup_pic_list = []
+            self.backup_ssid = -1
+        if self.backup_ssid < len(self.backup_pic_list) - 1:
+            self.backup_pic_list = self.backup_pic_list[: self.backup_ssid + 1]
+        if self.backup_pic_list and self.backup_pic_list[-1].get("mode") == "vector":
+            last_state = self.backup_pic_list[-1].get("state")
+            current_state = snapshot["state"]
+            if last_state == current_state:
+                print(f"🔍 钉图备份: 状态未变化，跳过备份 (命令数: {len(current_state)})")
+                self.backup_ssid = len(self.backup_pic_list) - 1
                 return
-            
-            # 1. 更新showing_imgpix到新尺寸 - 基于原始图像缩放
-            if hasattr(self, 'origin_imgpix') and self.origin_imgpix:
-                # 保存当前的backup_ssid，用于确定应该显示哪个备份状态
-                current_backup_id = getattr(self, 'backup_ssid', 0)
+            else:
+                # 输出差异帮助调试
+                print(f"🔍 钉图备份: 状态已变化 - 上次命令数: {len(last_state)}, 当前命令数: {len(current_state)}")
+        self.backup_pic_list.append(snapshot)
+        self.backup_ssid = len(self.backup_pic_list) - 1
+        print(f"✅ 钉图备份: 已创建备份 - 位置: {self.backup_ssid}, 总数: {len(self.backup_pic_list)}, 命令数: {len(snapshot['state'])}")
+        self._trim_history()
+
+    def _clear_overlay(self) -> None:
+        if hasattr(self, 'paintlayer') and self.paintlayer:
+            pix = self.paintlayer.pixmap()
+            if pix and not pix.isNull():
+                pix.fill(Qt.transparent)
+            self.paintlayer.update()
+
+    def _refresh_from_document(self, *, clear_overlay: bool = False) -> None:
+        """从矢量文档重新渲染并更新显示。
+        
+        内存优化：不再缓存 showing_imgpix，直接渲染到显示。
+        """
+        if not hasattr(self, 'layer_document'):
+            return
+        try:
+            target_w = max(1, self.width())
+            target_h = max(1, self.height())
+            display = self.layer_document.render_composited(QSize(target_w, target_h))
+            self.setPixmap(display)
+        except Exception as e:
+            print(f"⚠️ 钉图矢量刷新失败: {e}")
+        if clear_overlay:
+            self._clear_overlay()
+
+    def _apply_history_entry(self, entry: Dict) -> None:
+        try:
+            mode = entry.get("mode")
+            if mode == "vector":
+                self.layer_document.import_state(entry.get("state", []))
                 
-                # 更新当前显示的图像
-                if hasattr(self, 'backup_pic_list') and self.backup_pic_list and current_backup_id < len(self.backup_pic_list):
-                    # 获取原始备份状态的图像
-                    if hasattr(self, '_original_backup_list') and current_backup_id < len(self._original_backup_list):
-                        original_image = self._original_backup_list[current_backup_id]
+                # 恢复序号计数器：扫描所有序号命令，找到最大序号值
+                max_number = 0
+                if hasattr(self.layer_document, 'commands'):
+                    for cmd in self.layer_document.commands:
+                        if cmd.kind == "number" and hasattr(cmd, 'extra') and 'number' in cmd.extra:
+                            number = int(cmd.extra.get('number', 0))
+                            max_number = max(max_number, number)
+                
+                # 设置主窗口的序号计数器为最大序号+1
+                if hasattr(self, 'main_window') and self.main_window:
+                    if max_number > 0:
+                        self.main_window.drawnumber_counter = max_number + 1
+                        print(f"🔢 钉图序号计数器恢复: 最大序号={max_number}, 下一个序号={self.main_window.drawnumber_counter}")
                     else:
-                        original_image = self.origin_imgpix
-                else:
-                    original_image = self.origin_imgpix
-                
-                # 缩放并更新显示
-                self.showing_imgpix = original_image.scaled(
-                    new_width, new_height,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                self.setPixmap(self.showing_imgpix)
-            
-            # 2. 更新备份历史中的所有图像到新尺寸
-            if hasattr(self, 'backup_pic_list') and self.backup_pic_list:
-                # 保存原始图像列表的引用
-                if not hasattr(self, '_original_backup_list'):
-                    # 首次缩放，保存原始尺寸的备份
-                    self._original_backup_list = [backup.copy() for backup in self.backup_pic_list]
-                
-                # 将所有备份缩放到新尺寸
-                for i in range(len(self.backup_pic_list)):
-                    if i < len(self._original_backup_list) and self._original_backup_list[i]:
-                        try:
-                            scaled_backup = self._original_backup_list[i].scaled(
-                                new_width, new_height,
-                                Qt.KeepAspectRatio,
-                                Qt.SmoothTransformation
-                            )
-                            self.backup_pic_list[i] = scaled_backup
-                        except Exception as e:
-                            print(f"❌ 钉图缩放: 备份 {i} 缩放失败: {e}")
-            
+                        self.main_window.drawnumber_counter = 1
+                        
+            elif mode == "bitmap":
+                pixmap = entry.get("pixmap")
+                if pixmap and not pixmap.isNull():
+                    self.layer_document.set_base_pixmap(pixmap)
+                    self.layer_document.clear()
+            self._refresh_from_document(clear_overlay=True)
+        except Exception as e:
+            print(f"⚠️ 钉图历史应用失败: {e}")
+
+    def _after_vector_change(self, *, push_history: bool = True) -> None:
+        self._refresh_from_document(clear_overlay=True)
+        if push_history:
+            self._capture_history_state()
+
+    def notify_external_tool_commit(self, tool_label: str = "") -> None:
+        """供截图主窗口回调，确保钉图窗口刷新并写入历史。"""
+        try:
+            self._refresh_from_document(clear_overlay=False)
+            self._capture_history_state()
+            if tool_label:
+                print(f"📋 钉图矢量历史: 已记录来自{tool_label}的操作")
+        except Exception as e:
+            print(f"⚠️ 钉图历史通知失败: {e}")
+
+    def ingest_vector_commands(self, payload: List[Dict]) -> None:
+        if not payload or not hasattr(self, 'layer_document'):
+            return
+        changed = False
+        for item in payload:
+            if item.get("type") != "stroke":
+                continue
+            points = [self._normalize_point(pt) for pt in item.get("points", [])]
+            width_ratio = self._normalized_width(item.get("width", 1))
+            color = item.get("color")
+            if isinstance(color, QColor):
+                qcolor = QColor(color)
+            elif color is not None:
+                qcolor = QColor(color)
+            else:
+                qcolor = QColor(255, 0, 0)
+            is_highlight = bool(item.get("is_highlight"))
+            blend = "multiply" if is_highlight else "normal"
+            brush_style = "square" if is_highlight else "round"
+            self.layer_document.add_stroke(
+                points, qcolor, width_ratio, blend=blend, brush=brush_style
+            )
+            changed = True
+        if changed:
+            self._after_vector_change()
+
+    def record_rectangle_command(self, start_pt, end_pt, color, width):
+        try:
+            self.layer_document.add_rect(
+                self._normalize_point(start_pt),
+                self._normalize_point(end_pt),
+                QColor(color),
+                self._normalized_width(width),
+            )
+            self._after_vector_change()
+        except Exception as e:
+            print(f"⚠️ 钉图矢量矩形记录失败: {e}")
+
+    def record_circle_command(self, start_pt, end_pt, color, width):
+        try:
+            self.layer_document.add_circle(
+                self._normalize_point(start_pt),
+                self._normalize_point(end_pt),
+                QColor(color),
+                self._normalized_width(width),
+            )
+            self._after_vector_change()
+        except Exception as e:
+            print(f"⚠️ 钉图矢量圆形记录失败: {e}")
+
+    def record_arrow_command(self, start_pt, end_pt, color, width):
+        try:
+            self.layer_document.add_arrow(
+                self._normalize_point(start_pt),
+                self._normalize_point(end_pt),
+                QColor(color),
+                self._normalized_width(width),
+            )
+            self._after_vector_change()
+        except Exception as e:
+            print(f"⚠️ 钉图矢量箭头记录失败: {e}")
+
+    def record_number_command(self, center, number, text_color, bg_color, size):
+        """记录序号标注的矢量命令"""
+        try:
+            self.layer_document.add_number(
+                self._normalize_point(center),
+                int(number),
+                QColor(text_color),
+                QColor(bg_color),
+                self._normalized_width(size),
+            )
+            self._after_vector_change()
+        except Exception as e:
+            print(f"⚠️ 钉图矢量序号记录失败: {e}")
+
+    def record_text_command(self, anchor_point, text, color, font_size, line_ratio,
+                        font_family=None, font_weight=None, font_italic=False):
+        try:
+            self.layer_document.add_text(
+                self._normalize_point(anchor_point),
+                text,
+                QColor(color),
+                self._normalized_width(font_size),
+                float(line_ratio),
+                font_family=str(font_family) if font_family else "",
+                font_weight=int(font_weight) if font_weight is not None else 50,
+                font_italic=bool(font_italic),
+            )
+            self._after_vector_change()
+            return True
+        except Exception as e:
+            print(f"⚠️ 钉图矢量文字记录失败: {e}")
+            return False
+
+    def _update_for_resize(self, new_width, new_height):
+        """窗口缩放时根据矢量文档重新渲染，保持清晰。"""
+        try:
+            display = self._render_for_display(new_width, new_height)
+            if display is not None:
+                self.setPixmap(display)
         except Exception as e:
             print(f"❌ 钉图缩放: 更新失败: {e}")
-            import traceback
-            traceback.print_exc()
     
     def update_close_button_position(self):
         """更新关闭按钮的位置到右上角"""
@@ -781,25 +1017,23 @@ class Freezer(QLabel):
         except Exception as e:
             print(f"❌ 同步绘画层失败: {e}")
     
-    def copy_screenshot_backup_history(self, crop_x, crop_y, crop_w, crop_h):
+    def copy_screenshot_backup_history(self, crop_x, crop_y, crop_w, crop_h,
+                                 final_vector_state=None, preserve_current_document=False):
         """
-        复制截图窗口的绘制历史到钉图窗口，并进行坐标转换和区域裁剪
+        复制截图窗口的绘制历史到钉图窗口，并进行坐标转换和区域裁剪。
+        当提供 final_vector_state 时，会将其作为最终历史节点，确保当前矢量状态保留。
         
         Args:
             crop_x, crop_y: 截图区域的左上角坐标（在全屏坐标系中）
             crop_w, crop_h: 截图区域的宽度和高度
+            final_vector_state: 可选的矢量状态快照，用于在历史列表末尾追加矢量节点
+            preserve_current_document: 若为 True，则不在复制结束后应用最新历史，以避免覆盖当前矢量文档
         """
         try:
-            # 🔧 确保showing_imgpix有效（根本修复）
-            if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix or self.showing_imgpix.isNull():
-                print("⚠️ copy_screenshot_backup_history: showing_imgpix无效，尝试从pixmap获取")
-                current_pixmap = self.pixmap()
-                if current_pixmap and not current_pixmap.isNull():
-                    self.showing_imgpix = current_pixmap.copy()
-                    print("✅ copy_screenshot_backup_history: 已从pixmap恢复showing_imgpix")
-                else:
-                    print("❌ copy_screenshot_backup_history: 无法获取有效图像，中止历史复制")
-                    return
+            # 验证矢量文档是否有效
+            if not hasattr(self, 'layer_document') or not self.layer_document:
+                print("❌ copy_screenshot_backup_history: 矢量文档未初始化，中止历史复制")
+                return
             
             # 检查钉图窗口是否已经有自己的备份历史（表示已经进行过绘画操作）
             has_own_history = (hasattr(self, 'backup_pic_list') and 
@@ -809,167 +1043,110 @@ class Freezer(QLabel):
                 print(f"📋 钉图备份: 钉图窗口已有 {len(self.backup_pic_list)} 个备份，跳过历史复制，保持current_ssid={self.backup_ssid}")
                 return
             
-            if not hasattr(self.main_window, 'backup_pic_list') or not self.main_window.backup_pic_list:
-                print("📋 钉图备份: 主窗口没有绘制历史，创建初始备份状态")
-                # 确保备份列表存在并创建初始状态
-                if not hasattr(self, 'backup_pic_list'):
-                    self.backup_pic_list = []
-                if not self.backup_pic_list:
-                    # 创建初始备份状态：确保有一个"空白"状态可以撤回
-                    initial_backup = self.showing_imgpix.copy()
-                    self.backup_pic_list = [initial_backup]
-                    self.backup_ssid = 0
-                    # 同步更新原始备份列表
-                    if not hasattr(self, '_original_backup_list'):
-                        self._original_backup_list = []
-                    self._original_backup_list = [initial_backup.copy()]
-                    print(f"📋 钉图备份: 创建初始备份状态，backup_ssid={self.backup_ssid}")
-                return
-            
-            print(f"📋 钉图备份: 开始复制主窗口的 {len(self.main_window.backup_pic_list)} 个历史状态")
-            
-            # 初始化钉图的备份系统
+            source_history = getattr(self.main_window, 'backup_pic_list', None) or []
+            if source_history:
+                print(f"📋 钉图备份: 开始复制主窗口的 {len(source_history)} 个历史状态")
+                # 添加详细调试：显示每个历史的命令数
+                for idx, entry in enumerate(source_history):
+                    if isinstance(entry, dict) and entry.get("mode") == "overlay":
+                        vec_state = entry.get("vector", [])
+                        print(f"  - 主窗口历史 {idx}: overlay模式, 矢量命令数={len(vec_state) if vec_state else 0}")
+            else:
+                print("📋 钉图备份: 主窗口没有绘制历史，使用当前状态作为初始记录")
+
+            converter = getattr(self.main_window, '_convert_backup_entry_for_crop', None)
             self.backup_pic_list = []
-            
-            # ===== 关键修复：确保钉图窗口总是有正确的撤回状态 =====
-            # 重要：钉图窗口的showing_imgpix是当前最新状态（包含绘制内容）
-            # 我们需要构建正确的历史序列：[旧状态, ..., 当前状态]
-            
-            # 从主窗口复制所有历史状态到钉图窗口
-            for i, full_backup in enumerate(self.main_window.backup_pic_list):
-                if full_backup and not full_backup.isNull():
-                    # 从全屏备份中裁剪出截图区域
-                    cropped_backup = full_backup.copy(crop_x, crop_y, crop_w, crop_h)
-                    
-                    if not cropped_backup.isNull():
-                        self.backup_pic_list.append(cropped_backup)
-                        print(f"📋 钉图备份: 复制历史状态 {i}, 尺寸: {cropped_backup.width()}x{cropped_backup.height()}")
+            if callable(converter):
+                for i, full_backup in enumerate(source_history):
+                    converted = converter(full_backup, crop_x, crop_y, crop_w, crop_h)
+                    if not converted:
+                        print(f"⚠️ 钉图备份: 状态 {i} 无法转换，已跳过")
+                        continue
+                    cmd_count = len(converted.get("state", [])) if converted.get("mode") == "vector" else "N/A"
+                    self.backup_pic_list.append(converted)
+                    print(f"📋 钉图备份: 复制历史状态 {i}, 模式: {converted.get('mode')}, 命令数: {cmd_count}")
+            else:
+                for i, full_backup in enumerate(source_history):
+                    pixmap_candidate = None
+                    if isinstance(full_backup, dict):
+                        pixmap_candidate = full_backup.get("pixmap")
                     else:
+                        pixmap_candidate = full_backup
+                    if not pixmap_candidate or pixmap_candidate.isNull():
+                        print(f"⚠️ 钉图备份: 状态 {i} 无效")
+                        continue
+                    cropped_backup = pixmap_candidate.copy(crop_x, crop_y, crop_w, crop_h)
+                    if cropped_backup.isNull():
                         print(f"⚠️ 钉图备份: 状态 {i} 裁剪失败")
-                else:
-                    print(f"⚠️ 钉图备份: 状态 {i} 无效")
-            
-            # 确保当前显示的图像也在备份列表中（作为最新状态）
-            # 检查最后一个备份是否与当前showing_imgpix相同
-            current_state_exists = False
-            if len(self.backup_pic_list) > 0:
-                last_backup = self.backup_pic_list[-1]
-                # 使用更严格的比较：尺寸和像素数据都要匹配
-                if (last_backup.size() == self.showing_imgpix.size()):
-                    # 转换为QImage进行像素级比较
-                    last_image = last_backup.toImage()
-                    current_image = self.showing_imgpix.toImage()
-                    
-                    # 如果尺寸相同，再比较像素数据
-                    if last_image.size() == current_image.size():
-                        # 使用更可靠的比较方法：比较图像的哈希值或像素数据
-                        try:
-                            # 简单的像素数据比较
-                            last_bytes = last_image.bits().asstring(last_image.byteCount())
-                            current_bytes = current_image.bits().asstring(current_image.byteCount())
-                            if last_bytes == current_bytes:
-                                current_state_exists = True
-                                print("📋 钉图备份: 当前状态已存在于历史中（像素级匹配）")
-                            else:
-                                print("📋 钉图备份: 当前状态与最后备份不同（像素级差异）")
-                        except Exception as e:
-                            print(f"⚠️ 钉图备份: 像素比较失败，使用QImage比较: {e}")
-                            # 回退到QImage直接比较
-                            if last_image == current_image:
-                                current_state_exists = True
-                                print("📋 钉图备份: 当前状态已存在于历史中（QImage匹配）")
+                        continue
+                    self.backup_pic_list.append({"mode": "bitmap", "pixmap": cropped_backup})
+                    print(f"📋 钉图备份: 复制历史状态 {i}, 尺寸: {cropped_backup.width()}x{cropped_backup.height()}")
+
+            if not self.backup_pic_list and not final_vector_state:
+                print("📋 钉图备份: 无历史可复制，使用当前图像生成初始状态")
+			
+            if final_vector_state is not None:
+                vector_entry = {
+                    "mode": "vector",
+                    "state": [dict(entry) for entry in final_vector_state],
+                }
+                # 🔧 修复：检查最后一个历史是否与当前状态完全相同（命令内容而非数量）
+                if self.backup_pic_list:
+                    last_entry = self.backup_pic_list[-1]
+                    if last_entry.get("mode") == "vector":
+                        last_state = last_entry.get("state", [])
+                        # 比较完整内容而非只比较长度
+                        if last_state == final_vector_state:
+                            print(f"📋 钉图备份: 最后一个历史与当前状态完全相同，跳过替换")
+                        else:
+                            print(f"📋 钉图备份: 替换最后一个矢量状态（命令数: {len(last_state)} → {len(final_vector_state)}）")
+                            self.backup_pic_list[-1] = vector_entry
                     else:
-                        print(f"📋 钉图备份: 尺寸不匹配 - 最后备份:{last_image.size()}, 当前:{current_image.size()}")
+                        # 最后一个是位图模式，追加矢量状态
+                        print(f"📋 钉图备份: 追加矢量状态（{len(final_vector_state)} 命令）")
+                        self.backup_pic_list.append(vector_entry)
                 else:
-                    print(f"📋 钉图备份: QPixmap尺寸不匹配 - 最后备份:{last_backup.size()}, 当前:{self.showing_imgpix.size()}")
-            
-            # 如果当前状态不在历史中，添加它
-            if not current_state_exists:
-                self.backup_pic_list.append(self.showing_imgpix.copy())
-                print("📋 钉图备份: 添加当前状态到历史末尾")
-            else:
-                print("📋 钉图备份: 跳过添加当前状态（已存在）")
-            
-            # 确保至少有一个状态
-            if len(self.backup_pic_list) == 0:
-                print("⚠️ 钉图备份: 没有有效状态，创建默认状态")
-                self.backup_pic_list = [self.showing_imgpix.copy()]
-            
-            # 设置当前位置：指向最后一个状态（即当前显示的状态）
+                    # 没有历史，直接添加
+                    print(f"📋 钉图备份: 创建初始矢量状态（{len(final_vector_state)} 命令）")
+                    self.backup_pic_list.append(vector_entry)
+            elif not self.backup_pic_list:
+                # 没有历史记录，创建初始矢量快照（避免 bitmap 复制）
+                print("📋 钉图备份: 创建初始矢量快照")
+                if hasattr(self, 'layer_document'):
+                    initial_state = self.layer_document.export_state()
+                    self.backup_pic_list.append({"mode": "vector", "state": initial_state})
+                else:
+                    # 极端回退：无法获取矢量状态，使用 bitmap
+                    try:
+                        final_pixmap = self.pixmap()
+                        if final_pixmap and not final_pixmap.isNull():
+                            self.backup_pic_list.append({"mode": "bitmap", "pixmap": final_pixmap.copy()})
+                        else:
+                            print("❌ 钉图备份: 无法获取图像，放弃复制")
+                            return
+                    except Exception as e:
+                        print(f"❌ 钉图备份: 创建初始备份失败: {e}")
+                        return
+
+            self._trim_history()
             self.backup_ssid = len(self.backup_pic_list) - 1
-            
-            # 同步更新原始备份列表
-            if not hasattr(self, '_original_backup_list'):
-                self._original_backup_list = []
-            self._original_backup_list = [backup.copy() for backup in self.backup_pic_list]
-            
+            if not preserve_current_document and self.backup_pic_list:
+                self._apply_history_entry(self.backup_pic_list[self.backup_ssid])
             print(f"✅ 钉图备份: 历史复制完成，共 {len(self.backup_pic_list)} 个状态，当前位置: {self.backup_ssid}")
-            print(f"📋 钉图备份: 可撤回状态数: {self.backup_ssid}")
-            
-            # 添加详细的状态调试信息
-            print(f"🔍 钉图备份调试: 当前显示状态与backup_pic_list[{self.backup_ssid}]应该匹配")
-            if len(self.backup_pic_list) > 1:
-                print(f"🔍 钉图备份调试: 撤回将显示backup_pic_list[{self.backup_ssid-1}]（上一个状态）")
-            else:
-                print(f"🔍 钉图备份调试: 只有一个状态，无法撤回")
             
         except Exception as e:
             print(f"❌ 钉图备份: 复制历史失败: {e}")
             # 失败时创建基础备份，确保有撤回能力
             if not hasattr(self, 'backup_pic_list') or not self.backup_pic_list:
-                self.backup_pic_list = [self.showing_imgpix.copy()]
-                self.backup_ssid = 0
-                if not hasattr(self, '_original_backup_list'):
-                    self._original_backup_list = [self.showing_imgpix.copy()]
+                self._capture_history_state(initial=True)
                 print(f"📋 钉图备份: 创建应急备份状态")
     
     def backup_shortshot(self):
-        """钉图窗口的备份方法 - 备份当前底图（绘画层内容应该已经合并）"""
+        """钉图窗口的备份方法 - 记录当前矢量状态"""
         try:
-            # 确保showing_imgpix有效
-            if not self._ensure_showing_imgpix_valid():
-                return
-            
-            # 直接备份底图（绘画层内容已经通过_merge_paint_to_base合并）
-            backup_pixmap = self.showing_imgpix.copy()
-            
-            # 确保备份列表存在
-            if not hasattr(self, 'backup_pic_list'):
-                self.backup_pic_list = []
-                self.backup_ssid = 0  # 修复：初始化为0而不是-1
-            
-            # 如果当前不在最新位置，清除后续历史
-            if self.backup_ssid < len(self.backup_pic_list) - 1:
-                self.backup_pic_list = self.backup_pic_list[:self.backup_ssid + 1]
-                # 同步清理原始备份列表
-                if hasattr(self, '_original_backup_list') and self._original_backup_list:
-                    self._original_backup_list = self._original_backup_list[:self.backup_ssid + 1]
-            
-            # 添加新的备份状态
-            self.backup_pic_list.append(backup_pixmap)
-            self.backup_ssid = len(self.backup_pic_list) - 1
-            
-            # 同时更新原始备份列表（用于缩放）
-            if hasattr(self, '_original_backup_list'):
-                self._original_backup_list.append(backup_pixmap.copy())
-                # 保持列表长度同步
-                while len(self._original_backup_list) > len(self.backup_pic_list):
-                    self._original_backup_list.pop(0)
-            else:
-                self._original_backup_list = [backup.copy() for backup in self.backup_pic_list]
-            
-            # 限制历史长度
-            while len(self.backup_pic_list) > 10:
-                self.backup_pic_list.pop(0)
-                if hasattr(self, '_original_backup_list') and self._original_backup_list:
-                    self._original_backup_list.pop(0)
-                if self.backup_ssid > 0:
-                    self.backup_ssid -= 1
-            
+            self._capture_history_state()
         except Exception as e:
-            print(f"❌ 钉图备份: 创建备份失败: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ 钉图备份: 创建矢量备份失败: {e}")
     
     def last_step(self):
         """钉图窗口的撤销方法"""
@@ -993,30 +1170,8 @@ class Freezer(QLabel):
                 
             if self.backup_ssid > 0:
                 self.backup_ssid -= 1
-                backup_image = self.backup_pic_list[self.backup_ssid]
-                
-                # 更新显示图像 - 确保图像适配当前窗口尺寸
-                self.showing_imgpix = backup_image.copy()
-                
-                # 如果窗口已缩放，需要适配显示
-                if backup_image.size() != QSize(self.width(), self.height()):
-                    display_image = backup_image.scaled(
-                        self.width(), self.height(),
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                    self.setPixmap(display_image)
-                    print(f"📋 钉图撤销: 图像已缩放适配窗口 {self.width()}x{self.height()}")
-                else:
-                    self.setPixmap(self.showing_imgpix)
-                    print(f"📋 钉图撤销: 图像尺寸匹配，直接显示")
-                
-                # 清空绘画层
-                if hasattr(self, 'paintlayer') and self.paintlayer:
-                    if self.paintlayer.pixmap():
-                        self.paintlayer.pixmap().fill(Qt.transparent)
-                    self.paintlayer.update()
-                
+                entry = self.backup_pic_list[self.backup_ssid]
+                self._apply_history_entry(entry)
                 self.update()
                 print(f"📋 钉图撤销: 撤销到位置 {self.backup_ssid}")
             else:
@@ -1049,30 +1204,8 @@ class Freezer(QLabel):
                 
             if self.backup_ssid < len(self.backup_pic_list) - 1:
                 self.backup_ssid += 1
-                backup_image = self.backup_pic_list[self.backup_ssid]
-                
-                # 更新显示图像 - 确保图像适配当前窗口尺寸
-                self.showing_imgpix = backup_image.copy()
-                
-                # 如果窗口已缩放，需要适配显示
-                if backup_image.size() != QSize(self.width(), self.height()):
-                    display_image = backup_image.scaled(
-                        self.width(), self.height(),
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                    self.setPixmap(display_image)
-                    print(f"📋 钉图前进: 图像已缩放适配窗口 {self.width()}x{self.height()}")
-                else:
-                    self.setPixmap(self.showing_imgpix)
-                    print(f"📋 钉图前进: 图像尺寸匹配，直接显示")
-                
-                # 清空绘画层
-                if hasattr(self, 'paintlayer') and self.paintlayer:
-                    if self.paintlayer.pixmap():
-                        self.paintlayer.pixmap().fill(Qt.transparent)
-                    self.paintlayer.update()
-                
+                entry = self.backup_pic_list[self.backup_ssid]
+                self._apply_history_entry(entry)
                 self.update()
                 print(f"📋 钉图前进: 前进到位置 {self.backup_ssid}")
             else:
@@ -1174,6 +1307,9 @@ class Freezer(QLabel):
         saveaction = menu.addAction('名前を付けて保存')
         copyaction = menu.addAction('コピー')
         # ocrAction = menu.addAction('文字認識')  # OCR功能已删除，注释掉此按钮
+        paintaction = None
+        if not self._is_auto_toolbar_enabled():
+            paintaction = menu.addAction('ツールバー')
         topaction = menu.addAction('(キャンセル)最前面表示')
         rectaction = menu.addAction('(キャンセル)枠線')
 
@@ -1212,7 +1348,7 @@ class Freezer(QLabel):
             # 同时设置一个全局标志，防止任何清理操作
             self._prevent_clear = True
             
-            if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
+            if hasattr(self, 'layer_document') and self.layer_document:
                 try:
                     # 停止所有可能导致清理的定时器
                     if hasattr(self, 'timer') and self.timer:
@@ -1277,7 +1413,7 @@ class Freezer(QLabel):
         elif action == copyaction:
             clipboard = QApplication.clipboard()
             try:
-                if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
+                if hasattr(self, 'layer_document') and self.layer_document:
                     # 合并原图和绘画内容创建最终图像
                     final_img = self._create_merged_image()
                     clipboard.setPixmap(final_img)
@@ -1292,6 +1428,12 @@ class Freezer(QLabel):
         #     self.tips_shower.set_pos(self.x(),self.y())
         #     # 移除了文字识别中提示
         #     self.ocr()
+        elif paintaction and action == paintaction:
+            if self.main_window and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
+                print("🎨 通过右键菜单手动显示钉图工具栏")
+                self.main_window.show_toolbar_for_pinned_window(self)
+            else:
+                print("⚠️ 无法显示工具栏: 未找到主窗口或接口")
         elif action == topaction:
             self.change_ontop()
         elif action == rectaction:
@@ -1301,48 +1443,40 @@ class Freezer(QLabel):
     def _create_merged_image(self):
         """创建包含绘画内容的完整图像"""
         try:
-            # 以当前显示的图像为基础
-            if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix:
-                print("⚠️ 没有可用的基础图像")
-                return QPixmap()
-            
-            # 创建与当前钉图窗口尺寸相同的画布
-            merged_img = QPixmap(self.width(), self.height())
-            merged_img.fill(Qt.transparent)
-            
-            painter = QPainter(merged_img)
-            painter.setRenderHint(QPainter.Antialiasing)
-            
-            # 1. 先绘制底层的原图（缩放到当前窗口尺寸）
-            scaled_base = self.showing_imgpix.scaled(
-                self.width(), self.height(), 
-                Qt.KeepAspectRatio, 
-                Qt.SmoothTransformation
-            )
-            painter.drawPixmap(0, 0, scaled_base)
-            
-            # 2. 然后绘制绘画层的内容
+            if not hasattr(self, 'layer_document'):
+                print("⚠️ 矢量文档未初始化")
+                # 回退到当前显示的pixmap
+                fallback = self.pixmap()
+                return fallback if fallback and not fallback.isNull() else QPixmap()
+
+            target_size = QSize(max(1, self.width()), max(1, self.height()))
+            merged_img = self.layer_document.render_composited(target_size)
+
+            # 叠加仍在绘画层上的临时内容（例如还未提交的笔迹）
             if hasattr(self, 'paintlayer') and self.paintlayer and hasattr(self.paintlayer, 'pixmap'):
-                try:
-                    paint_content = self.paintlayer.pixmap()
-                    if paint_content and not paint_content.isNull():
-                        painter.drawPixmap(0, 0, paint_content)
-                        print("✅ 已合并绘画层内容")
+                paint_content = self.paintlayer.pixmap()
+                if paint_content and not paint_content.isNull():
+                    painter = QPainter(merged_img)
+                    painter.setRenderHint(QPainter.Antialiasing)
+                    if paint_content.size() != target_size:
+                        painter.drawPixmap(
+                            0,
+                            0,
+                            paint_content.scaled(
+                                target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                            ),
+                        )
                     else:
-                        print("ℹ️ 绘画层为空或无效")
-                except Exception as e:
-                    print(f"⚠️ 合并绘画层时出错: {e}")
-            else:
-                print("ℹ️ 没有绘画层或绘画层无效")
-            
-            painter.end()
+                        painter.drawPixmap(0, 0, paint_content)
+                    painter.end()
             print(f"✅ 成功创建合并图像，尺寸: {merged_img.width()}x{merged_img.height()}")
             return merged_img
             
         except Exception as e:
             print(f"❌ 创建合并图像失败: {e}")
-            # 出错时返回原图
-            return self.showing_imgpix if hasattr(self, 'showing_imgpix') and self.showing_imgpix else QPixmap()
+            # 出错时回退到当前显示的pixmap
+            fallback = self.pixmap()
+            return fallback if fallback and not fallback.isNull() else QPixmap()
             
     def change_ontop(self):
         if self.on_top:
@@ -1409,21 +1543,52 @@ class Freezer(QLabel):
                     if w < 50: w = 50
                     if w > 2 * QApplication.desktop().width(): w = 2 * QApplication.desktop().width()
                     
-                    if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
-                        scale = self.showing_imgpix.height() / self.showing_imgpix.width()
-                        h = w * scale
-                        s = self.width() / w  # 缩放比例
-                        self.setPixmap(self.showing_imgpix.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                        self.resize(w, h)
-                        # 同步绘画层（几何与内容）
-                        self._sync_paintlayer_on_resize(int(w), int(h))
-                        delta_x = -(w - old_width)*old_pos.x()/old_width
-                        delta_y = -(h - old_height)*old_pos.y()/old_height
-                        self.move(self.x() + delta_x, self.y() + delta_y)
+                    aspect_source = None
+                    if hasattr(self, 'layer_document'):
+                        aspect_source = self.layer_document.base_size
+                    if aspect_source:
+                        scale = aspect_source.height() / max(1, aspect_source.width())
+                    else:
+                        scale = self.height() / max(1, self.width())
+                    h = int(w * scale)
+                    display = self._render_for_display(w, h)
+                    if display is not None:
+                        self.setPixmap(display)
+                    self.resize(w, h)
+                    # 同步绘画层（几何与内容）
+                    self._sync_paintlayer_on_resize(int(w), int(h))
+                    delta_x = -(w - old_width)*old_pos.x()/old_width
+                    delta_y = -(h - old_height)*old_pos.y()/old_height
+                    self.move(self.x() + delta_x, self.y() + delta_y)
                     QApplication.processEvents()
 
             self.update()
+    def _clamp_position_to_virtual_desktop(self, x: int, y: int) -> Tuple[int, int]:
+        """将窗口位置限制在虚拟桌面范围内，防止移动到极端坐标。"""
+        screens = QApplication.screens()
+        if not screens:
+            return int(x), int(y)
+
+        margin = 200  # 允许适度超出屏幕边缘，避免看起来被“吸附”
+        left = min(screen.geometry().x() for screen in screens) - margin
+        top = min(screen.geometry().y() for screen in screens) - margin
+        right = max(screen.geometry().x() + screen.geometry().width() for screen in screens) + margin
+        bottom = max(screen.geometry().y() + screen.geometry().height() for screen in screens) + margin
+
+        max_x = right - self.width()
+        max_y = bottom - self.height()
+        if max_x < left:
+            max_x = left
+        if max_y < top:
+            max_y = top
+
+        clamped_x = max(left, min(int(x), max_x))
+        clamped_y = max(top, min(int(y), max_y))
+        if (clamped_x != int(x) or clamped_y != int(y)) and not getattr(self, '_suppress_move_debug', False):
+            print(f"⚠️ 钉图窗口位置越界: 请求=({x},{y}) -> 调整为=({clamped_x},{clamped_y})")
+        return clamped_x, clamped_y
     def move(self,x,y):
+        x, y = self._clamp_position_to_virtual_desktop(x, y)
         super().move(x,y)
         
         # 避免在DPI调整过程中的递归调用
@@ -1454,11 +1619,13 @@ class Freezer(QLabel):
     def _force_post_switch_resize(self, scale_changed: bool, new_scale: float):
         """显示器切换后模拟一次滚轮缩放，强制刷新钉图窗口尺寸。"""
         try:
-            if not hasattr(self, 'showing_imgpix') or not self.showing_imgpix:
-                return
             base_w = self.width()
             base_h = self.height()
-            img_ratio = self.showing_imgpix.height() / max(1, self.showing_imgpix.width())
+            if hasattr(self, 'layer_document'):
+                base_size = self.layer_document.base_size
+                img_ratio = base_size.height() / max(1, base_size.width())
+            else:
+                img_ratio = base_h / max(1, base_w)
             if scale_changed:
                 # 与基础缩放比较（如果有）
                 base_scale = getattr(self, '_base_scale', new_scale)
@@ -1472,8 +1639,9 @@ class Freezer(QLabel):
                 new_w = 2 * QApplication.desktop().width()
             new_h = int(new_w * img_ratio)
             # 仅在需要时调整尺寸，不输出调试
-            scaled = self.showing_imgpix.scaled(new_w, new_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.setPixmap(scaled)
+            display = self._render_for_display(new_w, new_h)
+            if display is not None:
+                self.setPixmap(display)
             self.resize(new_w, new_h)
             self._sync_paintlayer_on_resize(new_w, new_h)
             QApplication.processEvents()
@@ -1486,6 +1654,13 @@ class Freezer(QLabel):
             # 如果正在调整中，避免重复触发
             if getattr(self, '_adjusting_dpi', False):
                 return
+
+            # 节流：最多每0.5秒检查一次
+            now = time.monotonic()
+            last_check = getattr(self, '_last_dpi_check_at', 0.0)
+            if now - last_check < 0.5:
+                return
+            self._last_dpi_check_at = now
                 
             # 获取当前显示器
             screens = QApplication.screens()
@@ -1521,9 +1696,10 @@ class Freezer(QLabel):
                     'screen_geometry': screen_geometry_rect
                 }
                 # 保存原始图像信息作为基准
-                if hasattr(self, 'showing_imgpix') and self.showing_imgpix and not self.showing_imgpix.isNull():
+                if hasattr(self, 'layer_document') and self.layer_document:
                     # 使用图像的原始尺寸，不受当前显示缩放影响
-                    self._base_img_size = (self.showing_imgpix.width(), self.showing_imgpix.height())
+                    base_size = self.layer_document.base_size
+                    self._base_img_size = (base_size.width(), base_size.height())
                     # 记录初始显示尺寸和对应的缩放
                     self._base_display_size = (self.width(), self.height())
                     self._base_scale = system_scale
@@ -1547,7 +1723,7 @@ class Freezer(QLabel):
             if screen_changed:
                 # 显示器切换，后续自动调整
                 
-                if hasattr(self, 'showing_imgpix') and self.showing_imgpix and not self.showing_imgpix.isNull():
+                if hasattr(self, 'layer_document') and self.layer_document:
                     try:
                         # 设置调整标志，防止递归
                         self._adjusting_dpi = True
@@ -1582,14 +1758,9 @@ class Freezer(QLabel):
                         # 一次性调整到目标尺寸
                         try:
                             # 创建调整后的图像
-                            scaled_pixmap = self.showing_imgpix.scaled(
-                                target_width, target_height,
-                                Qt.KeepAspectRatio,
-                                Qt.SmoothTransformation
-                            )
-                            
-                            # 更新显示和尺寸
-                            self.setPixmap(scaled_pixmap)
+                            display = self._render_for_display(target_width, target_height)
+                            if display is not None:
+                                self.setPixmap(display)
                             self.resize(target_width, target_height)
                             # 同步绘画层（几何与内容）
                             self._sync_paintlayer_on_resize(int(target_width), int(target_height))
@@ -1654,9 +1825,6 @@ class Freezer(QLabel):
         if hasattr(self,"Loading_label"):
             self.Loading_label.setGeometry(0, 0, self.width(), self.height())
         
-        # 确保showing_imgpix有效
-        self._ensure_showing_imgpix_valid()
-        
         # 缩放时更新底图和备份历史
         self._update_for_resize(self.width(), self.height())
         
@@ -1699,36 +1867,87 @@ class Freezer(QLabel):
         # if has_painter_tools:
         #     print(f"绘图工具状态: {self.main_window.painter_tools}")
         
-        if (has_main_window and has_mode and is_pinned_mode and has_painter_tools and has_active_tools):
-            # print("钉图鼠标按下调试: 条件满足，开始委托事件")
-            # 有绘画工具激活时，将事件传递给主窗口处理
-            # 在钉图模式下，直接使用钉图窗口的本地坐标
-            # print(f"🎯 [钉图委托] 原始点击坐标: ({event.x()}, {event.y()})")
+        # 尝试委托给主窗口处理（无论是绘画工具还是选择操作）
+        if (has_main_window and has_mode and is_pinned_mode):
+            # 记录调用前的状态
+            was_selection_active = getattr(self.main_window, 'selection_active', False)
+            
+            # 构造委托事件
             main_event = QMouseEvent(event.type(), event.pos(), 
                                    event.globalPos(), event.button(), event.buttons(), event.modifiers())
-            # 添加标记表示这是来自钉图窗口的委托事件
             main_event._from_pinned_window = True
-            main_event._pinned_window_instance = self  # 添加当前钉图窗口引用
-            # print(f"钉图委托调试: 调用主窗口mousePressEvent，坐标=({event.x()}, {event.y()})")
+            main_event._pinned_window_instance = self
+            
+            # 调用主窗口处理
             self.main_window.mousePressEvent(main_event)
-            # 设置标志表示我们正在处理绘画拖拽
-            self.is_drawing_drag = True
-            # print(f"钉图鼠标按下调试: 设置is_drawing_drag=True")
-            # 调用父类方法以确保Qt正确跟踪鼠标状态
-            super().mousePressEvent(event)
-            return
+            
+            # 检查主窗口是否处理了该事件
+            # 1. 有激活的绘画工具
+            # 2. 进入了选区模式（选中了绘制元素）
+            # 3. 之前就是选区模式（正在调整元素）
+            is_selection_active = getattr(self.main_window, 'selection_active', False)
+            
+            if has_active_tools or is_selection_active or was_selection_active:
+                # 主窗口处理了事件，我们不再处理窗口拖动
+                self.is_drawing_drag = True
+                super().mousePressEvent(event)
+                return
             
         # print("钉图鼠标按下调试: 条件不满足，使用默认处理")
         # 重置绘画拖拽标志
         self.is_drawing_drag = False
         if event.button() == Qt.LeftButton:
-            if event.x() > self.width() - 20 and event.y() > self.height() - 20:
+            # 检测边缘区域（8个方向的调整大小）
+            edge_size = 10  # 边缘检测区域大小
+            x, y = event.x(), event.y()
+            w, h = self.width(), self.height()
+            
+            # 判断在哪个边缘或角落
+            on_left = x < edge_size
+            on_right = x > w - edge_size
+            on_top = y < edge_size
+            on_bottom = y > h - edge_size
+            
+            if on_left or on_right or on_top or on_bottom:
+                # 在边缘，准备调整大小
                 self.resize_the_window = True
-                self.setCursor(Qt.SizeFDiagCursor)
+                self.resize_start_pos = event.globalPos()
+                self.resize_start_geometry = self.geometry()
+                
+                # 确定调整方向
+                if on_top and on_left:
+                    self.resize_direction = 'top-left'
+                    self.setCursor(Qt.SizeFDiagCursor)
+                elif on_top and on_right:
+                    self.resize_direction = 'top-right'
+                    self.setCursor(Qt.SizeBDiagCursor)
+                elif on_bottom and on_left:
+                    self.resize_direction = 'bottom-left'
+                    self.setCursor(Qt.SizeBDiagCursor)
+                elif on_bottom and on_right:
+                    self.resize_direction = 'bottom-right'
+                    self.setCursor(Qt.SizeFDiagCursor)
+                elif on_left:
+                    self.resize_direction = 'left'
+                    self.setCursor(Qt.SizeHorCursor)
+                elif on_right:
+                    self.resize_direction = 'right'
+                    self.setCursor(Qt.SizeHorCursor)
+                elif on_top:
+                    self.resize_direction = 'top'
+                    self.setCursor(Qt.SizeVerCursor)
+                elif on_bottom:
+                    self.resize_direction = 'bottom'
+                    self.setCursor(Qt.SizeVerCursor)
             else:
+                # 不在边缘，准备拖动窗口
                 self.setCursor(Qt.SizeAllCursor)
                 self.drag = True
                 self.p_x, self.p_y = event.x(), event.y()
+                try:
+                    self._drag_offset = event.globalPos() - self.pos()
+                except Exception:
+                    self._drag_offset = QPoint(self.p_x, self.p_y)
             # self.resize(self.width()/2,self.height()/2)
             # self.setPixmap(self.pixmap().scaled(self.pixmap().width()/2,self.pixmap().height()/2))
 
@@ -1764,7 +1983,7 @@ class Freezer(QLabel):
         if event.button() == Qt.LeftButton:
             self.setCursor(Qt.ArrowCursor)
             self.drag = self.resize_the_window = False
-            self.drag = self.resize_the_window = False
+            self.resize_direction = None  # 重置调整方向
     def underMouse(self) -> bool:
         return super().underMouse()
     def mouseMoveEvent(self, event):
@@ -1803,22 +2022,104 @@ class Freezer(QLabel):
             
         if self.isVisible():
             if self.drag:
-                self.move(event.x() + self.x() - self.p_x, event.y() + self.y() - self.p_y)
+                if hasattr(self, '_drag_offset') and isinstance(self._drag_offset, QPoint):
+                    global_pos = event.globalPos()
+                    new_pos = global_pos - self._drag_offset
+                    self.move(new_pos.x(), new_pos.y())
+                else:
+                    self.move(event.x() + self.x() - self.p_x, event.y() + self.y() - self.p_y)
                 # 拖拽移动时检查DPI变化
                 self.check_and_adjust_for_dpi_change()
             elif self.resize_the_window:
-                if event.x() > 10 and event.y() > 10:
-                    w = event.x()
-                    scale = self.showing_imgpix.height() / self.showing_imgpix.width()
-                    h = w * scale
-                    self.resize(w, h)
-                    self.setPixmap(self.showing_imgpix.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                    # 同步绘画层（几何与内容）
-                    self._sync_paintlayer_on_resize(int(w), int(h))
-            elif event.x() > self.width() - 20 and event.y() > self.height() - 20:
-                self.setCursor(Qt.SizeFDiagCursor)
+                # 处理八个方向的调整大小（所有方向都保持宽高比）
+                if not hasattr(self, 'resize_direction'):
+                    return
+                    
+                delta = event.globalPos() - self.resize_start_pos
+                geometry = self.resize_start_geometry
+                
+                # 获取原始图像的宽高比
+                if hasattr(self, 'layer_document') and self.layer_document:
+                    base_size = self.layer_document.base_size
+                    aspect_ratio = base_size.height() / base_size.width()
+                else:
+                    aspect_ratio = geometry.height() / geometry.width()
+                
+                # 最小尺寸限制
+                min_size = 50
+                
+                # 根据不同方向计算新的几何参数
+                new_x = geometry.x()
+                new_y = geometry.y()
+                new_w = geometry.width()
+                new_h = geometry.height()
+                
+                direction = self.resize_direction
+                
+                # 计算宽度变化（用于所有方向）
+                if 'left' in direction:
+                    # 从左边调整：宽度减少
+                    new_w = geometry.width() - delta.x()
+                elif 'right' in direction:
+                    # 从右边调整：宽度增加
+                    new_w = geometry.width() + delta.x()
+                elif direction == 'top':
+                    # 从上边调整：根据高度变化计算宽度
+                    new_h = geometry.height() - delta.y()
+                    new_w = int(new_h / aspect_ratio)
+                elif direction == 'bottom':
+                    # 从下边调整：根据高度变化计算宽度
+                    new_h = geometry.height() + delta.y()
+                    new_w = int(new_h / aspect_ratio)
+                
+                # 应用最小尺寸限制
+                if new_w < min_size:
+                    new_w = min_size
+                
+                # 根据宽度计算高度（保持宽高比）
+                new_h = int(new_w * aspect_ratio)
+                
+                if new_h < min_size:
+                    new_h = min_size
+                    new_w = int(new_h / aspect_ratio)
+                
+                # 调整位置（如果从左边或上边调整）
+                if 'left' in direction:
+                    new_x = geometry.x() + geometry.width() - new_w
+                if 'top' in direction:
+                    new_y = geometry.y() + geometry.height() - new_h
+                
+                # 应用新的几何参数
+                self.setGeometry(new_x, new_y, new_w, new_h)
+                
+                # 缩放并更新图像
+                display = self._render_for_display(new_w, new_h)
+                if display is not None:
+                    self.setPixmap(display)
+                
+                # 同步绘画层（几何与内容）
+                self._sync_paintlayer_on_resize(int(new_w), int(new_h))
             else:
-                self.setCursor(Qt.ArrowCursor)
+                # 没有拖动或调整大小时，更新鼠标光标
+                edge_size = 10
+                x, y = event.x(), event.y()
+                w, h = self.width(), self.height()
+                
+                on_left = x < edge_size
+                on_right = x > w - edge_size
+                on_top = y < edge_size
+                on_bottom = y > h - edge_size
+                
+                if (on_top and on_left) or (on_bottom and on_right):
+                    self.setCursor(Qt.SizeFDiagCursor)
+                elif (on_top and on_right) or (on_bottom and on_left):
+                    self.setCursor(Qt.SizeBDiagCursor)
+                elif on_left or on_right:
+                    self.setCursor(Qt.SizeHorCursor)
+                elif on_top or on_bottom:
+                    self.setCursor(Qt.SizeVerCursor)
+                else:
+                    self.setCursor(Qt.ArrowCursor)
     def enterEvent(self,e):
         super().enterEvent(e)
         if hasattr(self, 'timer') and self.timer and not self.closed:
@@ -1832,6 +2133,9 @@ class Freezer(QLabel):
         if getattr(self, '_context_menu_active', False):
             return
             
+        if not self._is_auto_toolbar_enabled():
+            return
+
         # 只有在工具栏未显示时才显示工具栏，避免重复初始化导致二级菜单被隐藏
         if self.main_window and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
             # 检查工具栏是否已经显示
@@ -2062,15 +2366,7 @@ class Freezer(QLabel):
             self.hide_timer = None
             print(f"🧹 [内存清理] 延迟隐藏定时器已停止并删除")
         
-        # 清理图像数据 - 这是内存的大头，优先清理
-        if hasattr(self, 'origin_imgpix') and self.origin_imgpix:
-            self.origin_imgpix = None
-            print(f"🧹 [内存清理] origin_imgpix已清理")
-            
-        if hasattr(self, 'showing_imgpix') and self.showing_imgpix:
-            self.showing_imgpix = None
-            print(f"🧹 [内存清理] showing_imgpix已清理")
-            
+        # 清理图像数据 - 注意：不再使用 origin_imgpix 和 showing_imgpix，仅清理 OCR 相关图片
         if hasattr(self, 'ocr_res_imgpix') and self.ocr_res_imgpix:
             self.ocr_res_imgpix = None
             print(f"🧹 [内存清理] ocr_res_imgpix已清理")
@@ -2190,29 +2486,7 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理backup_pic_list时出错: {e}")
         
-        if hasattr(self, '_original_backup_list'):
-            try:
-                self._original_backup_list.clear()
-                self._original_backup_list = []
-                print(f"🧹 [内存清理] _original_backup_list已清理")
-            except Exception as e:
-                print(f"⚠️ 清理_original_backup_list时出错: {e}")
-        
-        # 清理origin_imgpix（原始图像）
-        if hasattr(self, 'origin_imgpix'):
-            try:
-                self.origin_imgpix = None
-                print(f"🧹 [内存清理] origin_imgpix已清理")
-            except Exception as e:
-                print(f"⚠️ 清理origin_imgpix时出错: {e}")
-        
-        # 清理showing_imgpix（当前显示图像）
-        if hasattr(self, 'showing_imgpix'):
-            try:
-                self.showing_imgpix = None
-                print(f"🧹 [内存清理] showing_imgpix已清理")
-            except Exception as e:
-                print(f"⚠️ 清理showing_imgpix时出错: {e}")
+        # 清理 origin_imgpix 和 showing_imgpix（已废弃，不再使用）
         
         # 清理关闭按钮
         if hasattr(self, 'close_button') and self.close_button:
@@ -2223,6 +2497,19 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理close_button时出错: {e}")
         
+        # 清理主窗口的文字输入框（如果被独立出来了）
+        # 必须在清理子控件之前执行，否则如果text_box是子控件会被误删
+        if self.main_window and hasattr(self.main_window, 'text_box'):
+            try:
+                self.main_window.text_box.hide()
+                self.main_window.text_box.clear()
+                # 如果文字框处于独立窗口状态，将其恢复为主窗口的子组件
+                self.main_window.text_box.setParent(self.main_window)
+                self.main_window.text_box.setWindowFlags(Qt.Widget)
+                print(f"🧹 [内存清理] 主窗口文字框已重置")
+            except Exception as e:
+                print(f"⚠️ 清理主窗口文字框时出错: {e}")
+
         # 清理所有可能的子控件
         for child in self.findChildren(QWidget):
             try:
@@ -2237,18 +2524,6 @@ class Freezer(QLabel):
             print(f"🧹 [内存清理] Qt事件已处理，待删除对象已清理")
         except Exception as e:
             print(f"⚠️ 处理Qt事件时出错: {e}")
-        
-        # 清理主窗口的文字输入框（如果被独立出来了）
-        if self.main_window and hasattr(self.main_window, 'text_box'):
-            try:
-                self.main_window.text_box.hide()
-                self.main_window.text_box.clear()
-                # 如果文字框处于独立窗口状态，将其恢复为主窗口的子组件
-                self.main_window.text_box.setParent(self.main_window)
-                self.main_window.text_box.setWindowFlags(Qt.Widget)
-                print(f"🧹 [内存清理] 主窗口文字框已重置")
-            except Exception as e:
-                print(f"⚠️ 清理主窗口文字框时出错: {e}")
         
         # 清理主窗口的绘画数据列表 - 防止累积
         if self.main_window:
