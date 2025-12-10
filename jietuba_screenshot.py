@@ -1310,10 +1310,10 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 默认工具配置
         default_settings = {
             'pen_on': {'size': 3, 'alpha': 255, 'color': '#ff0000'},            # 画笔：细一些，完全不透明，红色
-            'highlight_on': {'size': 30, 'alpha': 255, 'color': '#ffeb3b'},     # 荧光笔：更粗，完全不透明，黄色
-            'drawarrow_on': {'size': 2, 'alpha': 255, 'color': '#ff0000'},      # 箭头：更细，完全不透明，红色
-            'drawrect_bs_on': {'size': 2, 'alpha': 255, 'color': '#ff0000'},    # 矩形：细边框，半透明，红色
-            'drawcircle_on': {'size': 2, 'alpha': 255, 'color': '#ff0000'},     # 圆形：细边框，半透明，红色
+            'highlight_on': {'size': 30, 'alpha': 255, 'color': '#ffff00'},     # 荧光笔：更粗，完全不透明，黄色
+            'drawarrow_on': {'size': 5, 'alpha': 255, 'color': '#ff0000'},      # 箭头：更细，完全不透明，红色
+            'drawrect_bs_on': {'size': 7, 'alpha': 255, 'color': '#ff0000'},    # 矩形：细边框，半透明，红色
+            'drawcircle_on': {'size': 7, 'alpha': 255, 'color': '#ff0000'},     # 圆形：细边框，半透明，红色
             'drawtext_on': {'size': 16, 'alpha': 255, 'color': '#ff0000'},      # 文字：16像素字体，完全不透明，红色
             'drawnumber_on': {'size': 12, 'alpha': 255, 'color': '#ff0000'},    # 序号：默认12，完全不透明，红色
         }
