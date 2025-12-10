@@ -369,7 +369,6 @@ class ConfigManager:
         # 使用与项目一致的设置命名空间
         self.settings = QSettings('Fandes', 'jietuba')
         self.hotkey_default = "ctrl+1"
-        self.right_click_close_default = True
         self.smart_selection_default = False  # 智能选择默认关闭
         self.taskbar_button_default = False  # 任务栏按钮默认关闭
         self.long_stitch_debug_default = True  # 长截图调试默认开启
@@ -380,9 +379,6 @@ class ConfigManager:
     
     def set_hotkey(self, hotkey):
         self.settings.setValue('hotkey/global', hotkey)
-    
-    def get_right_click_close(self):
-        return self.settings.value('ui/right_click_close', self.right_click_close_default, type=bool)
     
     def get_smart_selection(self):
         return self.settings.value('screenshot/smartcursor', self.smart_selection_default, type=bool)
@@ -435,38 +431,7 @@ class ConfigManager:
         
         self.settings.setValue('screenshot/long_stitch_engine', normalized)
     
-    # 绘画工具配置管理
-    def get_tool_settings(self):
-        """获取所有绘画工具的配置"""
-        # 默认工具配置
-        default_settings = {
-            'pen_on': {'size': 5, 'alpha': 255, 'color': '#ff0000'},           # 画笔：细一些，完全不透明，红色
-            'highlight_on': {'size': 30, 'alpha': 255, 'color': '#ffeb3b'},    # 荧光笔：更粗，完全不透明，黄色
-            'drawarrow_on': {'size': 3, 'alpha': 255, 'color': '#ff0000'},     # 箭头：更细，完全不透明，红色
-            'drawrect_bs_on': {'size': 3, 'alpha': 200, 'color': '#ff0000'},   # 矩形：细边框，半透明，红色
-            'drawcircle_on': {'size': 3, 'alpha': 200, 'color': '#ff0000'},    # 圆形：细边框，半透明，红色
-            'drawtext_on': {'size': 16, 'alpha': 255, 'color': '#ff0000'},     # 文字：16像素字体，完全不透明，红色
-        }
-        
-        # 从配置文件读取，如果没有则使用默认值
-        saved_settings = {}
-        for tool_name, default_config in default_settings.items():
-            saved_settings[tool_name] = {
-                'size': self.settings.value(f'tools/{tool_name}/size', default_config['size'], type=int),
-                'alpha': self.settings.value(f'tools/{tool_name}/alpha', default_config['alpha'], type=int),
-                'color': self.settings.value(f'tools/{tool_name}/color', default_config['color'], type=str)
-            }
-        
-        return saved_settings
-    
-    def set_tool_setting(self, tool_name, setting_key, value):
-        """保存单个工具的设置"""
-        self.settings.setValue(f'tools/{tool_name}/{setting_key}', value)
-        print(f"💾 [配置保存] 工具 {tool_name} 的 {setting_key} 已保存: {value}")
-    
-    def get_tool_setting(self, tool_name, setting_key, default_value):
-        """获取单个工具的设置"""
-        return self.settings.value(f'tools/{tool_name}/{setting_key}', default_value)
+
 
     def get_log_enabled(self):
         """获取日志开关状态"""
@@ -599,8 +564,6 @@ class MainWindow(QMainWindow):
         # 预加载设置对话框（延迟创建，避免阻塞启动）
         self._settings_dialog = None
         QTimer.singleShot(1000, self._preload_settings_dialog)
-        # 程序启动后做一次“长截图”相关的轻量预热，避免首次点击时卡顿
-        self._schedule_long_screenshot_warm_up()
 
     def _preload_settings_dialog(self):
         """预加载设置对话框，避免首次打开时卡顿"""
@@ -616,48 +579,6 @@ class MainWindow(QMainWindow):
                 print("✅ [预加载] 设置对话框预加载完成")
         except Exception as e:
             print(f"⚠️ [预加载] 设置对话框预加载失败: {e}")
-
-    def _schedule_long_screenshot_warm_up(self):
-        """异步预热长截图所需的重资源，减少首次点击卡顿。
-
-        预热内容：
-        - 后台线程导入 pynput 并启动/停止一次 Listener（初始化底层钩子）
-        - 后台线程触发 Pillow 的基本路径（Image.new + tobytes）
-        - UI 线程做一次极小区域的屏幕抓取，初始化 Qt 截屏通道
-        """
-        try:
-            # 后台模块预热：避免阻塞UI
-            def _bg_warmup():
-                try:
-                    from pynput import mouse
-                    # 启停一次监听器，完成底层钩子初始化
-                    l = mouse.Listener(on_scroll=lambda *a, **k: None)
-                    l.start()
-                    l.stop()
-                except Exception as e:
-                    print(f"[warmup] 跳过pynput预热: {e}")
-
-                try:
-                    from PIL import Image as _PILImage
-                    _ = _PILImage.new('RGB', (1, 1)).tobytes()
-                except Exception as e:
-                    print(f"[warmup] 跳过Pillow预热: {e}")
-
-            threading.Thread(target=_bg_warmup, daemon=True).start()
-
-            # UI线程预热：做一次1x1像素抓取，初始化Qt截图路径
-            def _ui_warmup():
-                try:
-                    screen = QApplication.primaryScreen()
-                    if screen is not None:
-                        # 一些平台上宽或高为0会失败，使用 1x1
-                        _ = screen.grabWindow(0, 0, 0, 1, 1)
-                except Exception as e:
-                    print(f"[warmup] 跳过Qt抓取预热: {e}")
-
-            QTimer.singleShot(800, _ui_warmup)
-        except Exception as e:
-            print(f"[warmup] 预热调度失败: {e}")
     
     def _setup_window_monitor(self):
         """设置窗口状态监控，防止窗口状态异常"""
@@ -1039,7 +960,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.12 | 更新日: 2025.12/08")
+        self.version_label = QLabel("バージョン: 1.13 | 更新日: 2025.12/09")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
@@ -1094,7 +1015,6 @@ class MainWindow(QMainWindow):
         """加载配置"""
         # 读取并应用快捷键
         self.current_hotkey = self.config_manager.get_hotkey()
-        self.right_click_close = self.config_manager.get_right_click_close()
         print(f"加载配置完成 - 快捷键: {self.current_hotkey}")
         
         # 注册全局快捷键
