@@ -1734,16 +1734,14 @@ class Freezer(QLabel):
                         # 设置调整标志，防止递归
                         self._adjusting_dpi = True
                         
-                        # 基于原始图像尺寸和目标缩放计算理想显示尺寸
-                        base_img_width, base_img_height = self._base_img_size
-                        base_scale = self._base_scale
+                        # 基于当前尺寸和相对缩放比例计算理想显示尺寸
+                        # 这样可以保留用户手动缩放后的效果
                         
-                        # 计算在新显示器上应该显示的尺寸
-                        # 保持相同的视觉大小：相对于基准缩放的比例
-                        scale_ratio = base_scale / system_scale
+                        # 计算相对缩放比例：旧缩放 / 新缩放
+                        scale_ratio = last_scale / system_scale
                         
-                        target_width = int(self._base_display_size[0] * scale_ratio)
-                        target_height = int(self._base_display_size[1] * scale_ratio)
+                        target_width = int(self.width() * scale_ratio)
+                        target_height = int(self.height() * scale_ratio)
                         
                         # 获取显示器安全区域
                         screen_geometry = current_screen.geometry()
