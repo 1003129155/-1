@@ -16,9 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from PyQt5.QtCore import QPointF, QSize, Qt
-from PyQt5.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen,
-						 QPixmap)
+from PyQt5.QtCore import QPointF, QSize, Qt, QRectF
+from PyQt5.QtGui import (QColor, QFont, QPainter, QPen,
+					 QPixmap)
 
 
 ColorTuple = Tuple[int, int, int, int]
@@ -99,16 +99,24 @@ class VectorLayerDocument:
 		*,
 		blend: str = "normal",
 		brush: str = "round",
+		extra_meta: Optional[Dict[str, float]] = None,
 	) -> None:
 		if not points:
 			return
+		extra_payload: Dict[str, float] = {}
+		if extra_meta:
+			extra_payload.update(extra_meta)
+		brush_tag = brush if isinstance(brush, str) else ("round" if float(brush or 0) >= 0.5 else "square")
+		if brush_tag not in ("round", "square"):
+			brush_tag = "round"
+		extra_payload.setdefault("brush", brush_tag)
 		cmd = VectorPaintCommand(
 			kind="stroke",
 			points=list(points),
 			width_ratio=width_ratio,
 			color=_serialize_color(color),
 			blend=blend,
-			extra={"brush": 1.0 if brush == "round" else 0.0},
+			extra=extra_payload,
 		)
 		self.commands.append(cmd)
 
@@ -331,18 +339,16 @@ class VectorLayerDocument:
 		color = _color_from_tuple(cmd.color)
 
 		if cmd.kind == "stroke":
-			path = QPainterPath()
-			pts = [self._scaled_point(pt, width, height) for pt in cmd.points]
-			path.moveTo(pts[0])
-			for pt in pts[1:]:
-				path.lineTo(pt)
-			pen = QPen(color)
-			pen.setWidthF(self._pen_width(cmd, width, height))
-			pen.setJoinStyle(Qt.RoundJoin)
-			brush = cmd.extra.get("brush", 1.0)
-			pen.setCapStyle(Qt.RoundCap if brush >= 0.5 else Qt.SquareCap)
-			painter.setPen(pen)
-			painter.drawPath(path)
+			scaled_points = [self._scaled_point(pt, width, height) for pt in cmd.points]
+			stroke_width = self._pen_width(cmd, width, height)
+			StrokeStampRenderer.render(
+				painter,
+				scaled_points,
+				stroke_width,
+				QColor(color),
+				cmd.extra.get("brush"),
+				cmd.extra.get("raw_alpha"),
+			)
 			return
 
 		if cmd.kind in {"rect", "circle"}:
@@ -441,5 +447,91 @@ class VectorLayerDocument:
 			painter.drawText(int(text_x), int(text_y), text)
 			return
 
+class StrokeStampRenderer:
+	"""统一的笔迹重放器，保证画笔与荧光笔渲染一致"""
 
-__all__ = ["VectorLayerDocument", "VectorPaintCommand"]
+	@staticmethod
+	def render(
+		painter: QPainter,
+		points: Sequence[QPointF],
+		stroke_width: float,
+		base_color: QColor,
+		brush_hint,
+		raw_alpha,
+	) -> None:
+		if not points:
+			return
+		brush_kind = StrokeStampRenderer._normalize_brush(brush_hint)
+		color = QColor(base_color)
+		alpha = float(color.alpha())
+		if raw_alpha is not None:
+			try:
+				slider_alpha = float(raw_alpha)
+			except Exception:
+				slider_alpha = alpha
+			alpha = StrokeStampRenderer._effective_alpha(slider_alpha, stroke_width)
+		color.setAlpha(int(round(min(255.0, alpha))))
+		half = stroke_width / 2.0
+		last_point = None
+		for point in points:
+			x, y = point.x(), point.y()
+			StrokeStampRenderer._stamp(painter, x, y, half, stroke_width, color, brush_kind)
+			if last_point is not None:
+				for ix, iy in StrokeStampRenderer._interpolate(last_point, (x, y)):
+					StrokeStampRenderer._stamp(painter, ix, iy, half, stroke_width, color, brush_kind)
+			last_point = (x, y)
+		painter.setBrush(Qt.NoBrush)
+		painter.setPen(Qt.NoPen)
+
+	@staticmethod
+	def _normalize_brush(value) -> str:
+		if isinstance(value, str):
+			val = value.lower()
+			if val in ("round", "square"):
+				return val
+		try:
+			return "round" if float(value or 0) >= 0.5 else "square"
+		except Exception:
+			return "round"
+
+	@staticmethod
+	def _effective_alpha(slider_alpha: float, stroke_width: float) -> float:
+		if slider_alpha >= 255.0:
+			return 255.0
+		denom = max(1.0, stroke_width / 2.0)
+		return max(1.0, slider_alpha / denom)
+
+	@staticmethod
+	def _stamp(
+		painter: QPainter,
+		x: float,
+		y: float,
+		half: float,
+		size: float,
+		color: QColor,
+		brush_kind: str,
+	) -> None:
+		rect = QRectF(x - half, y - half, size, size)
+		if brush_kind == "square":
+			painter.fillRect(rect, color)
+		else:
+			painter.setPen(Qt.NoPen)
+			painter.setBrush(color)
+			painter.drawEllipse(rect)
+
+	@staticmethod
+	def _interpolate(
+		start: Tuple[float, float], end: Tuple[float, float]
+	) -> List[Tuple[float, float]]:
+		dx = end[0] - start[0]
+		dy = end[1] - start[1]
+		steps = int(max(abs(dx), abs(dy)))
+		if steps <= 1:
+			return []
+		return [
+			(start[0] + dx * (step / float(steps)), start[1] + dy * (step / float(steps)))
+			for step in range(1, steps)
+		]
+
+
+__all__ = ["VectorLayerDocument", "VectorPaintCommand", "StrokeStampRenderer"]

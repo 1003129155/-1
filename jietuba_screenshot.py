@@ -394,7 +394,20 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             is_highlight = bool(item.get("is_highlight"))
             blend = "multiply" if is_highlight else "normal"
             brush = "square" if is_highlight else "round"
-            doc.add_stroke(points, qcolor, width_ratio, blend=blend, brush=brush)
+            extra_meta = {}
+            if "raw_alpha" in item and item["raw_alpha"] is not None:
+                try:
+                    extra_meta["raw_alpha"] = float(item["raw_alpha"])
+                except Exception:
+                    pass
+            doc.add_stroke(
+                points,
+                qcolor,
+                width_ratio,
+                blend=blend,
+                brush=brush,
+                extra_meta=extra_meta or None,
+            )
             changed = True
         if changed:
             self._vector_dirty = True
@@ -1110,15 +1123,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             self.highlighter.setStyleSheet('background-color:rgb(50,50,50)')
             # 应用荧光笔设置
             self.apply_tool_settings('highlight_on')
-            # 确保荧光笔使用正确的黄色 - 强制设置
-            if hasattr(self, 'tool_settings') and 'highlight_on' in self.tool_settings:
-                highlight_color = self.tool_settings['highlight_on']['color']
-                self.pencolor = QColor(highlight_color)
-                self.pencolor.setAlpha(self.alpha)
-                # 更新颜色按钮显示
-                if hasattr(self, 'choice_clor_btn'):
-                    self._update_choice_color_button()
-                print(f"🟡 [荧光笔] 强制应用黄色: {highlight_color}")
             
             self.setCursor(QCursor(QPixmap(":/pen.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
             if hasattr(self, 'botton_box'):
@@ -2858,8 +2862,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         if paintlayer:  # 添加安全检查
             painter.drawPixmap(0, 0, paintlayer)
         painter.end()  # 一定要end
-        if save_as == 3:  # 油漆桶工具
-            return transparentpix
 
         pix = QPixmap(transparentpix.width(), transparentpix.height())
         p = QPainter(pix)
@@ -2880,6 +2882,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             return
         
         self.final_get_img = pix.copy(x0, y0, w, h)
+
+        if save_as == 3:  # 内部调用,直接返回裁剪后的图片（修复：移到裁剪后）
+            return self.final_get_img
 
         if save_as:
             if save_as == 1:

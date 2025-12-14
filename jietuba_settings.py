@@ -119,7 +119,7 @@ class SettingsDialog(QDialog):
         # 全局背景色
         self.setStyleSheet("""
             QDialog { background-color: #F5F5F5; color: #333333; }
-            QLabel { color: #333333; }
+            QLabel { color: #333333; background-color: transparent; }
             QScrollArea { background-color: transparent; border: none; }
             QScrollBar:vertical {
                 border: none; background: transparent; width: 6px; margin: 0px;
@@ -149,7 +149,7 @@ class SettingsDialog(QDialog):
 
         # 标题栏
         self.content_title = QLabel("ショートカット設定")
-        self.content_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        self.content_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px; background-color: transparent;")
         right_layout.addWidget(self.content_title)
 
         # 内容堆栈
@@ -158,8 +158,9 @@ class SettingsDialog(QDialog):
         self.content_stack.addWidget(self._create_long_screenshot_page())# 1
         self.content_stack.addWidget(self._create_smart_selection_page())# 2
         self.content_stack.addWidget(self._create_screenshot_save_page())# 3
-        self.content_stack.addWidget(self._create_log_page())            # 4
-        self.content_stack.addWidget(self._create_misc_page())           # 5
+        self.content_stack.addWidget(self._create_ocr_page())            # 4
+        self.content_stack.addWidget(self._create_log_page())            # 5
+        self.content_stack.addWidget(self._create_misc_page())           # 6
         right_layout.addWidget(self.content_stack)
         
         # 底部按钮栏
@@ -207,6 +208,7 @@ class SettingsDialog(QDialog):
             "📸  長いスクショ",
             "🎯  スマート選択",
             "💾  スクショ保存",
+            "🎯  OCR設定",
             "📝  ログ設定",
             "⚙️  その他"
         ]
@@ -222,12 +224,12 @@ class SettingsDialog(QDialog):
         
         text_layout = QVBoxLayout()
         lbl_title = QLabel(title)
-        lbl_title.setStyleSheet("font-size: 14px; color: #000;")
+        lbl_title.setStyleSheet("font-size: 14px; color: #000; background-color: transparent;")
         text_layout.addWidget(lbl_title)
         
         if desc:
             lbl_desc = QLabel(desc)
-            lbl_desc.setStyleSheet("font-size: 12px; color: #888;")
+            lbl_desc.setStyleSheet("font-size: 12px; color: #888; background-color: transparent;")
             text_layout.addWidget(lbl_desc)
             
         row.addLayout(text_layout)
@@ -266,6 +268,7 @@ class SettingsDialog(QDialog):
         # 快捷键输入
         row1 = QHBoxLayout()
         lbl = QLabel("ホットキー")
+        lbl.setStyleSheet("background-color: transparent;")
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setText(self.current_hotkey)
         self.hotkey_input.setPlaceholderText("例: ctrl+shift+a")
@@ -293,7 +296,7 @@ class SettingsDialog(QDialog):
 
         # 提示卡片
         hint_lbl = QLabel("💡 ヒント: Ctrl, Shift, Alt などの修飾キーと組み合わせて使用できます。")
-        hint_lbl.setStyleSheet("color: #888; padding: 5px;")
+        hint_lbl.setStyleSheet("color: #888; padding: 5px; background-color: transparent;")
         layout.addWidget(hint_lbl)
         
         layout.addStretch()
@@ -315,6 +318,7 @@ class SettingsDialog(QDialog):
         # 引擎选择
         row_engine = QHBoxLayout()
         lbl_eng = QLabel("拼接エンジン")
+        lbl_eng.setStyleSheet("background-color: transparent;")
         self.engine_combo = QComboBox()
         self.engine_combo.addItems(["Rustハッシュ値 (推奨)", "Pythonハッシュ値 (デバッグ用)"])
         # 数据映射 (0 -> hash_rust, 1 -> hash_python)
@@ -352,8 +356,9 @@ class SettingsDialog(QDialog):
         # 滚动冷却时间
         row_cooldown = QHBoxLayout()
         lbl_cooldown = QLabel("待機時間")
+        lbl_cooldown.setStyleSheet("background-color: transparent;")
         lbl_cooldown_desc = QLabel("スクロール後のキャプチャ待機時間 (秒)")
-        lbl_cooldown_desc.setStyleSheet("font-size: 12px; color: #888;")
+        lbl_cooldown_desc.setStyleSheet("font-size: 12px; color: #888; background-color: transparent;")
         
         self.cooldown_spinbox = QDoubleSpinBox()
         self.cooldown_spinbox.setRange(0.05, 1.0)
@@ -480,11 +485,12 @@ class SettingsDialog(QDialog):
         path_layout = QHBoxLayout()
         current_dir = self.config_manager.get_screenshot_save_path()
         self.save_path_lbl = QLabel(current_dir)
-        self.save_path_lbl.setStyleSheet("color: #576B95;")  # 仿链接色
+        self.save_path_lbl.setStyleSheet("color: #576B95; background-color: transparent;")  # 仿链接色
         self.save_path_lbl.setCursor(Qt.PointingHandCursor)
         self.save_path_lbl.setWordWrap(True)
         
         lbl_title = QLabel("保存フォルダ:")
+        lbl_title.setStyleSheet("background-color: transparent;")
         path_layout.addWidget(lbl_title)
         path_layout.addWidget(self.save_path_lbl)
         card.layout.addLayout(path_layout)
@@ -523,11 +529,167 @@ class SettingsDialog(QDialog):
         
         # 提示信息
         info_lbl = QLabel("💡 ヒント: 自動保存をオフにしても、クリップボードにコピーされます。")
-        info_lbl.setStyleSheet("color: #888; padding: 5px;")
+        info_lbl.setStyleSheet("color: #888; padding: 5px; background-color: transparent;")
         layout.addWidget(info_lbl)
         
         layout.addStretch()
         return page
+
+    def _create_ocr_page(self):
+        """创建 OCR 设置页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)  # 减少间距
+
+        # 检测 OCR 文件是否存在
+        ocr_files_exist = self._check_ocr_files()
+        
+        # 如果 OCR 模块不可用，显示紧凑的警告
+        if not ocr_files_exist:
+            warning_card = SettingCard()
+            warning_layout = QVBoxLayout()
+            warning_layout.setSpacing(8)
+            
+            warning_header = QHBoxLayout()
+            warning_icon = QLabel("ℹ️")
+            warning_icon.setStyleSheet("font-size: 24px; background-color: transparent;")
+            warning_header.addWidget(warning_icon)
+            
+            warning_title = QLabel("無OCR版本 / OCRモジュールが見つかりません")
+            warning_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2196F3; background-color: transparent;")
+            warning_header.addWidget(warning_title)
+            warning_header.addStretch()
+            warning_layout.addLayout(warning_header)
+            
+            warning_text = QLabel(
+                "これは無OCR版本です。OCR機能は含まれていません。\n\n"
+                "OCR機能が必要な場合は、フル版をダウンロードするか、\n"
+                "以下のコマンドでOCRモジュールをインストールしてください:\n"
+                "pip install rapidocr onnxruntime"
+            )
+            warning_text.setStyleSheet("font-size: 12px; color: #666; background-color: transparent;")
+            warning_text.setWordWrap(True)
+            warning_layout.addWidget(warning_text)
+            
+            warning_card.layout.addLayout(warning_layout)
+            layout.addWidget(warning_card)
+
+        # 主设置卡片
+        card = SettingCard()
+
+        # OCR 功能开关
+        self.ocr_enable_toggle = ToggleSwitch()
+        if not ocr_files_exist:
+            self.ocr_enable_toggle.setEnabled(False)
+            self.ocr_enable_toggle.setChecked(False)
+        
+        row_ocr_enable = self._create_toggle_row(
+            "OCR機能を有効化",
+            "ピン留めウィンドウでテキスト認識と選択を有効にします。",
+            self.config_manager.get_ocr_enabled() if ocr_files_exist else False,
+            self.ocr_enable_toggle
+        )
+        card.layout.addLayout(row_ocr_enable)
+        card.layout.addWidget(HLine())
+
+        # 语言提示 - 紧凑布局
+        lang_layout = QHBoxLayout()
+        lang_layout.setSpacing(10)
+        
+        lang_icon = QLabel("🌏")
+        lang_icon.setStyleSheet("font-size: 16px; background-color: transparent;")
+        lang_layout.addWidget(lang_icon)
+        
+        lang_info = QLabel("自動言語認識: 中国語・日本語・韓国語・英語の混合認識に対応")
+        lang_info.setStyleSheet("font-size: 12px; color: #666; background-color: transparent;")
+        lang_layout.addWidget(lang_info)
+        lang_layout.addStretch()
+        
+        card.layout.addLayout(lang_layout)
+        
+        # 如果模块可用，添加预处理选项
+        if ocr_files_exist:
+            card.layout.addWidget(HLine())
+            
+            # 灰度转换 - 紧凑布局
+            gray_layout = QHBoxLayout()
+            gray_layout.setSpacing(10)
+            
+            self.ocr_grayscale_toggle = ToggleSwitch()
+            self.ocr_grayscale_toggle.setChecked(self.config_manager.get_ocr_grayscale_enabled())
+            gray_layout.addWidget(self.ocr_grayscale_toggle)
+            
+            gray_label = QLabel("グレースケール変換")
+            gray_label.setStyleSheet("font-size: 13px; color: #000; background-color: transparent;")
+            gray_layout.addWidget(gray_label)
+            
+            gray_hint = QLabel("(~5ms)")
+            gray_hint.setStyleSheet("font-size: 11px; color: #888; background-color: transparent;")
+            gray_layout.addWidget(gray_hint)
+            gray_layout.addStretch()
+            
+            card.layout.addLayout(gray_layout)
+            
+            # 图像放大 - 紧凑布局
+            upscale_layout = QHBoxLayout()
+            upscale_layout.setSpacing(10)
+            
+            self.ocr_upscale_toggle = ToggleSwitch()
+            self.ocr_upscale_toggle.setChecked(self.config_manager.get_ocr_upscale_enabled())
+            upscale_layout.addWidget(self.ocr_upscale_toggle)
+            
+            upscale_label = QLabel("画像拡大")
+            upscale_label.setStyleSheet("font-size: 13px; color: #000; background-color: transparent;")
+            upscale_layout.addWidget(upscale_label)
+            
+            upscale_hint = QLabel("(~30-50ms)")
+            upscale_hint.setStyleSheet("font-size: 11px; color: #888; background-color: transparent;")
+            upscale_layout.addWidget(upscale_hint)
+            
+            # 放大倍数 - 内联
+            upscale_layout.addSpacing(20)
+            scale_label = QLabel("倍率:")
+            scale_label.setStyleSheet("font-size: 12px; color: #666; background-color: transparent;")
+            upscale_layout.addWidget(scale_label)
+            
+            self.ocr_scale_spinbox = QDoubleSpinBox()
+            self.ocr_scale_spinbox.setRange(1.0, 3.0)
+            self.ocr_scale_spinbox.setSingleStep(0.1)
+            self.ocr_scale_spinbox.setDecimals(1)
+            self.ocr_scale_spinbox.setValue(self.config_manager.get_ocr_upscale_factor())
+            self.ocr_scale_spinbox.setStyleSheet(self._get_input_style())
+            self.ocr_scale_spinbox.setFixedWidth(70)
+            upscale_layout.addWidget(self.ocr_scale_spinbox)
+            
+            times_label = QLabel("×")
+            times_label.setStyleSheet("font-size: 12px; color: #666; background-color: transparent;")
+            upscale_layout.addWidget(times_label)
+            
+            upscale_layout.addStretch()
+            card.layout.addLayout(upscale_layout)
+        
+        layout.addWidget(card)
+        
+        # 底部提示 - 紧凑版
+        if ocr_files_exist:
+            info_lbl = QLabel("💡 小さい文字が認識できない場合は、画像拡大を有効にしてください。")
+            info_lbl.setStyleSheet("color: #888; font-size: 11px; padding: 5px; background-color: transparent;")
+            info_lbl.setWordWrap(True)
+            layout.addWidget(info_lbl)
+        
+        layout.addStretch()
+        return page
+    
+    def _check_ocr_files(self):
+        """检测 OCR 模块是否可用"""
+        try:
+            # 尝试导入 rapidocr
+            import rapidocr
+            import onnxruntime
+            return True
+        except ImportError:
+            return False
 
     def _create_log_page(self):
         page = QWidget()
@@ -551,11 +713,12 @@ class SettingsDialog(QDialog):
         path_layout = QHBoxLayout()
         current_dir = self.config_manager.get_log_dir()
         self.path_lbl = QLabel(current_dir)
-        self.path_lbl.setStyleSheet("color: #576B95;")  # 仿链接色
+        self.path_lbl.setStyleSheet("color: #576B95; background-color: transparent;")  # 仿链接色
         self.path_lbl.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针
         self.path_lbl.setWordWrap(True)
         
         lbl_title = QLabel("保存場所:")
+        lbl_title.setStyleSheet("background-color: transparent;")
         path_layout.addWidget(lbl_title)
         path_layout.addWidget(self.path_lbl)
         card.layout.addLayout(path_layout)
@@ -630,7 +793,7 @@ class SettingsDialog(QDialog):
         
         # 提示信息
         info_lbl = QLabel("💡 ヒント: バックグラウンド起動でも、タスクトレイから操作できます。")
-        info_lbl.setStyleSheet("color: #888; padding: 5px;")
+        info_lbl.setStyleSheet("color: #888; padding: 5px; background-color: transparent;")
         layout.addWidget(info_lbl)
         
         layout.addStretch()
@@ -678,7 +841,7 @@ class SettingsDialog(QDialog):
     # ================= 逻辑处理 =================
 
     def _on_nav_changed(self, index):
-        title_map = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "スクショ保存設定", "ログ設定", "その他設定"]
+        title_map = ["ショートカット設定", "長いスクリーンショット", "スマート選択", "スクショ保存設定", "OCR設定", "ログ設定", "その他設定"]
         if 0 <= index < len(title_map):
             self.content_title.setText(title_map[index])
             self.content_stack.setCurrentIndex(index)
@@ -800,16 +963,28 @@ class SettingsDialog(QDialog):
         # 保存路径从标签读取（如果用户修改过）
         self.config_manager.set_screenshot_save_path(self.save_path_lbl.text())
         
-        # 3. 杂项设置
+        # 3. OCR 设置
+        self.config_manager.set_ocr_enabled(self.ocr_enable_toggle.isChecked())
+        # 注意: 语言设置已移除,RapidOCR 自动支持多语言混合识别
+        
+        # OCR 图像预处理设置
+        if hasattr(self, 'ocr_grayscale_toggle'):
+            self.config_manager.set_ocr_grayscale_enabled(self.ocr_grayscale_toggle.isChecked())
+        if hasattr(self, 'ocr_upscale_toggle'):
+            self.config_manager.set_ocr_upscale_enabled(self.ocr_upscale_toggle.isChecked())
+        if hasattr(self, 'ocr_scale_spinbox'):
+            self.config_manager.set_ocr_upscale_factor(self.ocr_scale_spinbox.value())
+        
+        # 4. 杂项设置
         self.config_manager.set_show_main_window(self.show_main_window_toggle.isChecked())
         self.config_manager.set_pinned_auto_toolbar(self.pin_auto_toolbar_toggle.isChecked())
         
-        # 4. 引擎和长截图参数
+        # 5. 引擎和长截图参数
         self.config_manager.set_long_stitch_engine(self.engine_combo.currentData())
         self.config_manager.set_long_stitch_debug(self.debug_toggle.isChecked())
         self.config_manager.settings.setValue('screenshot/scroll_cooldown', self.cooldown_spinbox.value())
         
-        # 5. Rust 参数
+        # 6. Rust 参数
         for key, spinbox in self.spinboxes.items():
             val = spinbox.value()
             self.config_manager.settings.setValue(f'screenshot/{key}', val)

@@ -19,10 +19,12 @@ jietuba_drawing.py - 统一绘画模块
 """
 
 import math
-from PyQt5.QtCore import Qt, QRect, QRectF, QPoint
+from typing import Optional
+from PyQt5.QtCore import Qt, QRect, QRectF, QPoint, QPointF
 from PyQt5.QtGui import (QPainter, QPen, QColor, QBrush, QPixmap, QFont, 
                          QPolygon, QFontMetrics)
 from PyQt5.QtWidgets import QLabel
+from jietuba_layer_system import StrokeStampRenderer
 
 
 # ============================================================================
@@ -75,121 +77,101 @@ class UnifiedTextDrawer:
             font_size: 字体大小
             color: 字体颜色
             document_size: 文字框的文档大小，用于位置调整
-        
+
         Returns:
             bool: 绘制是否成功
         """
         if not pixmap or pixmap.isNull() or not text or not text.strip():
             return False
-            
+
         try:
             painter = QPainter(pixmap)
             painter.setFont(QFont('', font_size))
             painter.setPen(QPen(color, 3, Qt.SolidLine))
-            
-            # 处理多行文字
+
             lines = text.split('\n')
-            line_height = font_size * 2.0  # 行高 = 字体大小 * 2倍
-            
-            # 计算基础位置（与原始实现保持一致）
+            line_height = font_size * 2.0
             if document_size:
                 base_x = pos[0] + document_size.height() / 8 - 3
                 base_y = pos[1] + document_size.height() * 32 / 41 - 2
             else:
                 base_x = pos[0]
                 base_y = pos[1]
-            
-            # 绘制每一行
+
             for i, line in enumerate(lines):
-                if line.strip():  # 只绘制非空行
-                    final_x = base_x
-                    final_y = base_y + i * line_height
-                    painter.drawText(final_x, final_y, line)
-            
+                if line.strip():
+                    painter.drawText(base_x, base_y + i * line_height, line)
+
             painter.end()
             return True
-            
+
         except Exception as e:
             print(f"统一文字绘制器错误: {e}")
             return False
-    
+
     @staticmethod
     def process_text_drawing(parent, pixmap_painter, text_box, *, vector_target=None, force_raster=False):
         """
         处理文字绘制流程（统一截图窗口和钉图窗口的逻辑）
-        
+
         Args:
             parent: 父窗口对象
             pixmap_painter: 用于绘制的QPainter对象
             text_box: 文字输入框对象
-        
+
         Returns:
             bool: 是否成功绘制了文字
         """
         try:
-            # 检查输入参数的有效性
             if not pixmap_painter:
                 print("统一文字绘制: pixmap_painter为空")
                 return False
-                
+
             if not pixmap_painter.isActive():
                 print("统一文字绘制: pixmap_painter未激活")
                 return False
-            
-            # 检查是否需要绘制文字
+
             if not (hasattr(parent, 'text_box') and text_box.paint) and \
-               not (hasattr(parent, 'drawtext_pointlist') and 
-                    len(parent.drawtext_pointlist) > 0 and 
+               not (hasattr(parent, 'drawtext_pointlist') and
+                    len(parent.drawtext_pointlist) > 0 and
                     getattr(text_box, 'paint', False)):
                 return False
-            
-            # 进入文本绘制流程
+
             text_box.paint = False
             text = text_box.toPlainText()
             pos = None
-            
             if len(parent.drawtext_pointlist) > 0:
-                # 仅在有有效文字时再弹出坐标，避免丢失
                 pos = parent.drawtext_pointlist[0]
-            
+
             if text and text.strip() and pos is not None:
-                # 弹出使用的坐标点
                 parent.drawtext_pointlist.pop(0)
-                
-                # 设置字体与画笔
                 try:
                     pixmap_painter.setFont(QFont('', parent.tool_width))
                     pixmap_painter.setPen(QPen(parent.pencolor, 3, Qt.SolidLine))
                 except Exception as font_error:
                     print(f"统一文字绘制: 设置字体时出错: {font_error}")
                     return False
-                
-                # 多行处理
+
                 lines = text.split('\n')
                 line_height = parent.tool_width * 2.0
-                # 使用锚定基准，避免随 document.height() 变化导致首行跳动
-                if not hasattr(text_box, '_anchor_base'):  # 兼容旧状态
+                if not hasattr(text_box, '_anchor_base'):
                     h = text_box.document.size().height()
                     text_box._anchor_base = (
                         pos[0] + h / 8 - 3,
                         pos[1] + h * 32 / 41 - 2
                     )
                 base_x, base_y = text_box._anchor_base
-                
-                # 计算文字区域边界
+
                 max_line_width = 0
                 total_height = len(lines) * line_height
-                
-                # 估算每行的宽度（简单估算）
                 for line in lines:
                     if line.strip():
-                        estimated_width = len(line) * parent.tool_width * 0.6  # 粗略估算
+                        estimated_width = len(line) * parent.tool_width * 0.6
                         max_line_width = max(max_line_width, estimated_width)
-                
-                # 创建文字区域矩形
-                text_rect = QRect(int(base_x), int(base_y - parent.tool_width), 
-                                int(max_line_width), int(total_height))
-                
+
+                text_rect = QRect(int(base_x), int(base_y - parent.tool_width),
+                                  int(max_line_width), int(total_height))
+
                 handled_by_vector = False
                 font_family = ""
                 font_weight = None
@@ -203,6 +185,7 @@ class UnifiedTextDrawer:
                 font_family = font_obj.family()
                 font_weight = font_obj.weight()
                 font_italic = font_obj.italic()
+
                 vector_owner = vector_target or parent
                 if vector_owner and hasattr(vector_owner, 'record_text_command'):
                     try:
@@ -226,7 +209,6 @@ class UnifiedTextDrawer:
                     handled_by_vector = False
 
                 if not handled_by_vector:
-                    # 绘制文字
                     try:
                         if font_obj:
                             pixmap_painter.setFont(font_obj)
@@ -236,49 +218,38 @@ class UnifiedTextDrawer:
                     except Exception as draw_error:
                         print(f"统一文字绘制: 绘制文字时出错: {draw_error}")
                         return False
-                
-                # 注意：不在这里结束painter，让调用方处理painter的生命周期
-                # 这样可以避免 "QPaintDevice: Cannot destroy paint device that is being painted" 错误
-                
-                # 创建撤销备份 - 钉图窗口在record_text_command中已处理
+
                 if not handled_by_vector and hasattr(parent, 'backup_shortshot'):
                     try:
                         parent.backup_shortshot()
                     except Exception as backup_error:
                         print(f"统一文字绘制: 备份时出错: {backup_error}")
-                
-                # 清空输入框内容，避免下一次新建输入框出现上一次文本
+
                 try:
                     text_box.clear()
-                    # 清除锚点信息，确保下次新建输入框时重新计算位置
                     if hasattr(text_box, '_anchor_base'):
                         delattr(text_box, '_anchor_base')
                 except Exception:
                     pass
-                
-                # 还原焦点
+
                 if hasattr(parent, 'setFocus'):
                     try:
                         parent.setFocus()
                     except Exception:
                         pass
-                
+
                 try:
                     parent._last_tool_commit = 'text'
                 except Exception:
                     pass
                 return True
             else:
-                # 空文本：清理坐标点和输入框状态，因为没有内容需要绘制
                 print("统一文字绘制: 无文字内容或仅空白，清理坐标点和输入框状态")
-                
-                # 清理对应的坐标点，因为这个点不会被使用
                 if len(parent.drawtext_pointlist) > 0:
                     unused_coord = parent.drawtext_pointlist.pop(0)
                     print(f"统一文字绘制: 清理未使用的坐标点: {unused_coord}")
-                
+
                 text_box.clear()
-                # 清除锚点信息，确保下次新建输入框时重新计算位置
                 if hasattr(text_box, '_anchor_base'):
                     delattr(text_box, '_anchor_base')
                 try:
@@ -287,7 +258,7 @@ class UnifiedTextDrawer:
                 except Exception:
                     pass
                 return False
-                
+
         except Exception as e:
             print(f"统一文字绘制流程错误: {e}")
             return False
@@ -612,6 +583,51 @@ class PaintLayer(QLabel):
         self._pending_vectors = []
         self._current_stroke_meta = None
 
+    def _vector_capture_color(self, effective_color: QColor, is_highlight: bool) -> QColor:
+        """选择写入矢量命令的颜色。
+
+        荧光笔实时绘制会为了笔迹效果调整 alpha，但矢量还原需要保留用户设定
+        的透明度，否则撤销/重做后会显得过淡。普通画笔仍沿用实时颜色。"""
+
+        try:
+            if is_highlight and hasattr(self.parent, 'pencolor'):
+                return QColor(self.parent.pencolor)
+        except Exception:
+            pass
+        return QColor(effective_color)
+
+    def _current_pen_color(self, is_highlight: bool) -> QColor:
+        color = QColor(self.parent.pencolor)
+        if not is_highlight and color.alpha() != 255:
+            denom = max(1.0, float(self.parent.tool_width) / 2.0)
+            al = self.parent.pencolor.alpha() / denom
+            color.setAlpha(int(al) if al > 1 else 1)
+        return color
+
+    def _render_live_brush_segment(
+        self,
+        painter: QPainter,
+        start_point,
+        end_point,
+        color: QColor,
+        brush_kind: str,
+        raw_alpha: Optional[int],
+    ) -> None:
+        if not painter or not end_point:
+            return
+        points = []
+        if start_point and start_point[0] != -2:
+            points.append(QPointF(start_point[0], start_point[1]))
+        points.append(QPointF(end_point[0], end_point[1]))
+        StrokeStampRenderer.render(
+            painter,
+            points,
+            self.parent.tool_width,
+            QColor(color),
+            brush_kind,
+            raw_alpha,
+        )
+
     def force_flush_pen_points(self):
         """强制处理待绘制的画笔点，生成矢量命令
         
@@ -629,53 +645,53 @@ class PaintLayer(QLabel):
             return
         
         try:
-            def get_ture_pen_alpha_color():
-                color = QColor(self.parent.pencolor)
-                if color.alpha() != 255:
-                    al = self.parent.pencolor.alpha() / (self.parent.tool_width / 2)
-                    if al > 1:
-                        color.setAlpha(al)
-                    else:
-                        color.setAlpha(1)
-                return color
-            
-            # 处理画笔点（与 paintEvent 中的逻辑相同）
             while len(self.parent.pen_pointlist):
-                color = get_ture_pen_alpha_color()
-                pen_painter = self.pixPainter
-                pen_painter.setBrush(color)
-                pen_painter.setPen(Qt.NoPen)
-                pen_painter.setRenderHint(QPainter.Antialiasing)
                 new_pen_point = self.parent.pen_pointlist.pop(0)
-                
+
                 if new_pen_point[0] == -2:
                     self._finalize_vector_stroke()
                     self.parent.old_pen = new_pen_point
                     continue
-                
+
+                is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+                color = self._current_pen_color(is_highlight)
+                raw_alpha = int(self.parent.pencolor.alpha()) if is_highlight else None
+                brush_kind = "square" if is_highlight else "round"
+                pen_painter = self.pixPainter
+                if pen_painter:
+                    pen_painter.setRenderHint(QPainter.Antialiasing)
+
                 if self.parent.old_pen is None:
                     self.parent.old_pen = new_pen_point
-                    self._current_stroke_meta = (QColor(color), self.parent.tool_width, bool(self.parent.painter_tools.get('highlight_on')))
+                    self._current_stroke_meta = (
+                        self._vector_capture_color(color, is_highlight),
+                        self.parent.tool_width,
+                        is_highlight,
+                        raw_alpha,
+                    )
                     self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
                     continue
-                
-                is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+
                 if not self._active_stroke:
-                    self._current_stroke_meta = (QColor(color), self.parent.tool_width, is_highlight)
-                
+                    self._current_stroke_meta = (
+                        self._vector_capture_color(color, is_highlight),
+                        self.parent.tool_width,
+                        is_highlight,
+                        raw_alpha,
+                    )
+
                 self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
-                
+
                 if self.parent.old_pen[0] != -2 and new_pen_point[0] != -2:
-                    # 绘制（荧光笔使用正方形，普通画笔使用圆形）
-                    if is_highlight:
-                        pen_painter.drawRect(new_pen_point[0] - self.parent.tool_width / 2,
-                                           new_pen_point[1] - self.parent.tool_width / 2,
-                                           self.parent.tool_width, self.parent.tool_width)
-                    else:
-                        pen_painter.drawEllipse(new_pen_point[0] - self.parent.tool_width / 2,
-                                              new_pen_point[1] - self.parent.tool_width / 2,
-                                              self.parent.tool_width, self.parent.tool_width)
-                
+                    self._render_live_brush_segment(
+                        pen_painter,
+                        self.parent.old_pen,
+                        new_pen_point,
+                        color,
+                        brush_kind,
+                        raw_alpha,
+                    )
+
                 self.parent.old_pen = new_pen_point
             
             # 处理完成后，将 _pending_vectors 传递给父窗口
@@ -885,16 +901,6 @@ class PaintLayer(QLabel):
             print(f'pixpainter init fail: {e}')
             return
 
-        def get_ture_pen_alpha_color():
-            color = QColor(self.parent.pencolor)
-            if color.alpha() != 255:
-                al = self.parent.pencolor.alpha() / (self.parent.tool_width / 2)
-                if al > 1:
-                    color.setAlpha(al)
-                else:
-                    color.setAlpha(1)
-            return color
-
         # 荧光笔特殊处理 - 使用正片叠底模式
         base_painter = None
         if self.parent.painter_tools.get('highlight_on'):
@@ -906,49 +912,49 @@ class PaintLayer(QLabel):
 
         # 画笔工具
         while len(self.parent.pen_pointlist):
-            color = get_ture_pen_alpha_color()
-            pen_painter = base_painter if base_painter else self.pixPainter
-            pen_painter.setBrush(color)
-            pen_painter.setPen(Qt.NoPen)
-            pen_painter.setRenderHint(QPainter.Antialiasing)
             new_pen_point = self.parent.pen_pointlist.pop(0)
             if new_pen_point[0] == -2:
                 self._finalize_vector_stroke()
                 self.parent.old_pen = new_pen_point
                 continue
+
+            is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+            color = self._current_pen_color(is_highlight)
+            raw_alpha = int(self.parent.pencolor.alpha()) if is_highlight else None
+            brush_kind = "square" if is_highlight else "round"
+            pen_painter = base_painter if is_highlight and base_painter else self.pixPainter
+            if pen_painter:
+                pen_painter.setRenderHint(QPainter.Antialiasing)
+
             if self.parent.old_pen is None:
                 self.parent.old_pen = new_pen_point
-                self._current_stroke_meta = (QColor(color), self.parent.tool_width, bool(self.parent.painter_tools.get('highlight_on')))
+                self._current_stroke_meta = (
+                    self._vector_capture_color(color, is_highlight),
+                    self.parent.tool_width,
+                    is_highlight,
+                    raw_alpha,
+                )
                 self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
                 continue
-            is_highlight = bool(self.parent.painter_tools.get('highlight_on'))
+
             if not self._active_stroke:
-                self._current_stroke_meta = (QColor(color), self.parent.tool_width, is_highlight)
+                self._current_stroke_meta = (
+                    self._vector_capture_color(color, is_highlight),
+                    self.parent.tool_width,
+                    is_highlight,
+                    raw_alpha,
+                )
+
             self._active_stroke.append([new_pen_point[0], new_pen_point[1]])
             if self.parent.old_pen[0] != -2 and new_pen_point[0] != -2:
-                # 荧光笔使用正方形笔刷，普通画笔使用圆形笔刷
-                if self.parent.painter_tools.get('highlight_on'):
-                    pen_painter.drawRect(new_pen_point[0] - self.parent.tool_width / 2,
-                                         new_pen_point[1] - self.parent.tool_width / 2,
-                                         self.parent.tool_width, self.parent.tool_width)
-                else:
-                    pen_painter.drawEllipse(new_pen_point[0] - self.parent.tool_width / 2,
-                                            new_pen_point[1] - self.parent.tool_width / 2,
-                                            self.parent.tool_width, self.parent.tool_width)
-                if abs(new_pen_point[0] - self.parent.old_pen[0]) > 1 or abs(
-                        new_pen_point[1] - self.parent.old_pen[1]) > 1:
-                    interpolateposs = get_line_interpolation(new_pen_point[:], self.parent.old_pen[:])
-                    if interpolateposs is not None:
-                        for pos in interpolateposs:
-                            x, y = pos
-                            if self.parent.painter_tools.get('highlight_on'):
-                                pen_painter.drawRect(x - self.parent.tool_width / 2,
-                                                     y - self.parent.tool_width / 2,
-                                                     self.parent.tool_width, self.parent.tool_width)
-                            else:
-                                pen_painter.drawEllipse(x - self.parent.tool_width / 2,
-                                                        y - self.parent.tool_width / 2,
-                                                        self.parent.tool_width, self.parent.tool_width)
+                self._render_live_brush_segment(
+                    pen_painter,
+                    self.parent.old_pen,
+                    new_pen_point,
+                    color,
+                    brush_kind,
+                    raw_alpha,
+                )
             self.parent.old_pen = new_pen_point
         if self._pending_vectors and hasattr(self.parent, 'ingest_vector_commands'):
             payload = list(self._pending_vectors)
@@ -1211,7 +1217,12 @@ class PaintLayer(QLabel):
             self._active_stroke = []
             self._current_stroke_meta = None
             return
-        color, width, is_highlight = self._current_stroke_meta
+        if len(self._current_stroke_meta) == 4:
+            color, width, is_highlight, raw_alpha = self._current_stroke_meta
+        else:
+            # 兼容老版本，仅包含颜色/宽度/高亮标记
+            color, width, is_highlight = self._current_stroke_meta
+            raw_alpha = int(color.alpha())
         self._pending_vectors.append(
             {
                 "type": "stroke",
@@ -1219,6 +1230,7 @@ class PaintLayer(QLabel):
                 "color": QColor(color),
                 "width": width,
                 "is_highlight": is_highlight,
+                "raw_alpha": raw_alpha,
             }
         )
         self._active_stroke = []

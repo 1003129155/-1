@@ -170,11 +170,50 @@ class JietubaLogger:
     
     def _setup_exception_handlers(self):
         """设置异常捕获处理器"""
+        _exc_handling = threading.local()
+
         def handle_exception(exc_type, exc_value, exc_tb):
-            stack = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
-            self.error(f"未捕获异常:\n{stack}")
-            if self._original_excepthook:
-                self._original_excepthook(exc_type, exc_value, exc_tb)
+            # 避免异常处理中再次抛异常导致 sys.excepthook 递归报错
+            if getattr(_exc_handling, "active", False):
+                # 已在处理中，直接回退到原始钩子或默认打印
+                if self._original_excepthook and self._original_excepthook != handle_exception:
+                    try:
+                        self._original_excepthook(exc_type, exc_value, exc_tb)
+                    except Exception:
+                        # 如果原始钩子也失败，尝试直接打印到 stderr
+                        try:
+                            traceback.print_exception(exc_type, exc_value, exc_tb)
+                        except:
+                            pass
+                else:
+                    try:
+                        traceback.print_exception(exc_type, exc_value, exc_tb)
+                    except:
+                        pass
+                return
+
+            _exc_handling.active = True
+            try:
+                stack = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+                self.error(f"未捕获异常:\n{stack}")
+                if self._original_excepthook and self._original_excepthook != handle_exception:
+                    try:
+                        self._original_excepthook(exc_type, exc_value, exc_tb)
+                    except Exception:
+                        traceback.print_exception(exc_type, exc_value, exc_tb)
+                else:
+                    # 保底打印
+                    traceback.print_exception(exc_type, exc_value, exc_tb)
+            except Exception as e:
+                # 记录器自身出错，尝试直接输出
+                try:
+                    if sys.__stderr__:
+                        sys.__stderr__.write(f"Logger exception handler failed: {e}\n")
+                        traceback.print_exception(exc_type, exc_value, exc_tb, file=sys.__stderr__)
+                except:
+                    pass
+            finally:
+                _exc_handling.active = False
         
         sys.excepthook = handle_exception
         

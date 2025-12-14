@@ -135,8 +135,13 @@ class PinnedPaintLayer(QLabel):
         # print(f"PaintLayer鼠标按下调试: 转发给主窗口，坐标=({event.x()}, {event.y()})")
         
         # 检查是否有绘画工具激活
-        if (self.main_window and hasattr(self.main_window, 'painter_tools') and 
-            1 in self.main_window.painter_tools.values()):
+        has_drawing_tool = (self.main_window and hasattr(self.main_window, 'painter_tools') and 
+            1 in self.main_window.painter_tools.values())
+        
+        # OCR 文字层的状态现在通过回调动态检查，不再需要在此处手动设置
+        # 避免在事件处理过程中修改控件状态导致的问题
+        
+        if has_drawing_tool:
             
             # 创建标记的事件对象
             main_event = QMouseEvent(event.type(), event.pos(), 
@@ -684,7 +689,6 @@ class Freezer(QLabel):
         self.resize_start_geometry = QRect()  # 调整大小开始时的几何信息
         self.on_top = True
         self.p_x = self.p_y = 0
-        self.setToolTip("ホイールで大きさ調整")
         # self.setMaximumSize(QApplication.desktop().size())
         self.timer = QTimer(self)  # 创建一个定时器
         self.timer.setInterval(200)  # 设置定时器的时间间隔为200ms
@@ -709,6 +713,9 @@ class Freezer(QLabel):
         self.backup_pic_list = []
         self.backup_ssid = -1
         self._capture_history_state(initial=True)
+        
+        # 异步触发 OCR 文字识别层
+        self._init_ocr_text_layer_async()
     
     def _is_auto_toolbar_enabled(self):
         """读取设置，判断是否应自动显示钉图工具栏。"""
@@ -722,6 +729,140 @@ class Freezer(QLabel):
         except Exception as e:
             print(f"⚠️ 钉图工具栏设置读取失败: {e}")
         return True
+    
+    def _check_drawing_status(self) -> bool:
+        """检查是否处于绘图模式（供 OCR 文字层回调）"""
+        try:
+            if self.main_window and hasattr(self.main_window, 'painter_tools'):
+                # 检查是否有任何绘图工具被激活 (值为1)
+                return 1 in self.main_window.painter_tools.values()
+        except Exception:
+            pass
+        return False
+
+    def _init_ocr_text_layer_async(self):
+        """异步初始化 OCR 文字选择层（不阻塞主线程）"""
+        try:
+            from PyQt5.QtCore import QThread
+            from PyQt5.QtWidgets import QMessageBox
+            from jietuba_ocr import _ocr_manager, is_ocr_available, initialize_ocr
+            from jietuba_ocr_text_layer import OCRTextLayer
+            
+            # 检查 OCR 功能是否被启用（从设置读取）
+            ocr_enabled = False
+            # 注意：RapidOCR Python API 自动支持多语言识别，无需指定语言
+            enable_grayscale = True  # 默认启用灰度
+            enable_upscale = False   # 默认不启用放大
+            upscale_factor = 1.5     # 默认放大1.5倍
+            try:
+                slabel = getattr(self, 'main_window', None)
+                if slabel is not None:
+                    host = getattr(slabel, 'parent', None)
+                    config_manager = getattr(host, 'config_manager', None)
+                    if config_manager is not None:
+                        ocr_enabled = config_manager.get_ocr_enabled()
+                        enable_grayscale = config_manager.get_ocr_grayscale_enabled()
+                        enable_upscale = config_manager.get_ocr_upscale_enabled()
+                        upscale_factor = config_manager.get_ocr_upscale_factor()
+            except Exception as e:
+                print(f"⚠️ [OCR] 读取 OCR 设置失败: {e}")
+            
+            # 如果 OCR 功能被禁用，直接返回
+            if not ocr_enabled:
+                print("ℹ️ [OCR] OCR 功能已禁用，跳过初始化")
+                return
+            
+            # 检查 OCR 是否可用
+            if not is_ocr_available():
+                print("⚠️ [OCR] OCR 模块不可用（无OCR版本或未安装模块），静默跳过")
+                # 静默跳过，不显示弹窗（无OCR版本的友好处理）
+                # 用户可以在设置页面看到 OCR 模块状态
+                return
+            
+            # 初始化 OCR 引擎（自动支持多语言）
+            init_result = initialize_ocr()
+            if not init_result:
+                print(f"⚠️ [OCR] OCR 引擎初始化失败，静默跳过")
+                # 静默跳过，不显示弹窗
+                # 如果用户真的需要OCR功能，会在设置页面看到相关提示
+                return
+            
+            print(f"✅ [OCR] OCR 引擎已就绪（支持中日韩英混合识别）")
+            
+            # 创建透明文字层
+            self.ocr_text_layer = OCRTextLayer(self)
+            self.ocr_text_layer.setGeometry(0, 0, self.width(), self.height())
+            # 设置动态检查回调
+            self.ocr_text_layer.is_drawing_callback = self._check_drawing_status
+            # 启用文字层（这会触发 _apply_effective_enabled）
+            self.ocr_text_layer.set_enabled(True)
+            
+            # 创建异步 OCR 识别线程
+            class OCRThread(QThread):
+                def __init__(self, pixmap, enable_grayscale, enable_upscale, upscale_factor, parent=None):
+                    super().__init__(parent)
+                    self.pixmap = pixmap
+                    self.enable_grayscale = enable_grayscale
+                    self.enable_upscale = enable_upscale
+                    self.upscale_factor = upscale_factor
+                    self.result = None
+                
+                def run(self):
+                    try:
+                        self.result = _ocr_manager.recognize_pixmap(
+                            self.pixmap, 
+                            return_format="dict",
+                            enable_grayscale=self.enable_grayscale,
+                            enable_upscale=self.enable_upscale,
+                            upscale_factor=self.upscale_factor
+                        )
+                    except Exception as e:
+                        print(f"❌ [OCR Thread] 识别失败: {e}")
+                        self.result = None
+            
+            # 获取钉图的图像
+            if hasattr(self, 'layer_document'):
+                pixmap = self.layer_document.render_composited()
+            else:
+                pixmap = self.pixmap()
+            
+            # 保存原始尺寸用于归一化坐标
+            original_width = pixmap.width()
+            original_height = pixmap.height()
+            
+            # 启动异步识别
+            self.ocr_thread = OCRThread(pixmap, enable_grayscale, enable_upscale, upscale_factor, self)
+            
+            def on_ocr_finished():
+                try:
+                    # 明确检查 result 是否为字典（避免 numpy 数组的真值判断问题）
+                    if self.ocr_thread.result is not None and isinstance(self.ocr_thread.result, dict):
+                        if self.ocr_thread.result.get('code') == 100:
+                            # 加载 OCR 结果到文字层（传入原始尺寸用于归一化）
+                            self.ocr_text_layer.load_ocr_result(
+                                self.ocr_thread.result, 
+                                original_width, 
+                                original_height
+                            )
+                            print(f"✅ [OCR] 钉图文字层已就绪，识别到 {len(self.ocr_thread.result.get('data', []))} 个文字块")
+                except Exception as e:
+                    print(f"❌ [OCR] 加载结果失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    # 清理线程
+                    if hasattr(self, 'ocr_thread'):
+                        self.ocr_thread.deleteLater()
+                        self.ocr_thread = None
+            
+            self.ocr_thread.finished.connect(on_ocr_finished)
+            self.ocr_thread.start()
+            
+        except ImportError:
+            # OCR 模块不存在，静默跳过
+            pass
+        except Exception as e:
+            print(f"⚠️ [OCR] 初始化失败: {e}")
 
     # ======================== 矢量绘制辅助 ========================
     def _current_display_size(self) -> Tuple[int, int]:
@@ -1050,6 +1191,8 @@ class Freezer(QLabel):
                 return
             
             source_history = getattr(self.main_window, 'backup_pic_list', None) or []
+            source_active_index = getattr(self.main_window, 'backup_ssid', len(source_history) - 1)
+            source_active_index = max(0, min(source_active_index, len(source_history) - 1)) if source_history else -1
             if source_history:
                 print(f"📋 钉图备份: 开始复制主窗口的 {len(source_history)} 个历史状态")
                 # 添加详细调试：显示每个历史的命令数
@@ -1062,6 +1205,7 @@ class Freezer(QLabel):
 
             converter = getattr(self.main_window, '_convert_backup_entry_for_crop', None)
             self.backup_pic_list = []
+            source_index_map = []
             if callable(converter):
                 for i, full_backup in enumerate(source_history):
                     converted = converter(full_backup, crop_x, crop_y, crop_w, crop_h)
@@ -1070,6 +1214,7 @@ class Freezer(QLabel):
                         continue
                     cmd_count = len(converted.get("state", [])) if converted.get("mode") == "vector" else "N/A"
                     self.backup_pic_list.append(converted)
+                    source_index_map.append(i)
                     print(f"📋 钉图备份: 复制历史状态 {i}, 模式: {converted.get('mode')}, 命令数: {cmd_count}")
             else:
                 for i, full_backup in enumerate(source_history):
@@ -1086,47 +1231,54 @@ class Freezer(QLabel):
                         print(f"⚠️ 钉图备份: 状态 {i} 裁剪失败")
                         continue
                     self.backup_pic_list.append({"mode": "bitmap", "pixmap": cropped_backup})
+                    source_index_map.append(i)
                     print(f"📋 钉图备份: 复制历史状态 {i}, 尺寸: {cropped_backup.width()}x{cropped_backup.height()}")
 
             if not self.backup_pic_list and not final_vector_state:
                 print("📋 钉图备份: 无历史可复制，使用当前图像生成初始状态")
 			
+            target_pos = None
             if final_vector_state is not None:
                 vector_entry = {
                     "mode": "vector",
                     "state": [dict(entry) for entry in final_vector_state],
                 }
-                # 🔧 修复：检查最后一个历史是否与当前状态完全相同（命令内容而非数量）
-                if self.backup_pic_list:
-                    last_entry = self.backup_pic_list[-1]
-                    if last_entry.get("mode") == "vector":
-                        last_state = last_entry.get("state", [])
-                        # 比较完整内容而非只比较长度
-                        if last_state == final_vector_state:
-                            print(f"📋 钉图备份: 最后一个历史与当前状态完全相同，跳过替换")
-                        else:
-                            print(f"📋 钉图备份: 替换最后一个矢量状态（命令数: {len(last_state)} → {len(final_vector_state)}）")
-                            self.backup_pic_list[-1] = vector_entry
+                if source_active_index >= 0:
+                    if source_index_map:
+                        for pos, idx in enumerate(source_index_map):
+                            if idx == source_active_index:
+                                target_pos = pos
+                                break
+                    if target_pos is None:
+                        insert_pos = 0
+                        while insert_pos < len(source_index_map) and source_index_map[insert_pos] < source_active_index:
+                            insert_pos += 1
+                        self.backup_pic_list.insert(insert_pos, vector_entry)
+                        source_index_map.insert(insert_pos, source_active_index)
+                        target_pos = insert_pos
+                        print(f"📋 钉图备份: 为撤销位置 {source_active_index} 插入裁剪后的矢量状态")
                     else:
-                        # 最后一个是位图模式，追加矢量状态
-                        print(f"📋 钉图备份: 追加矢量状态（{len(final_vector_state)} 命令）")
-                        self.backup_pic_list.append(vector_entry)
+                        print(f"📋 钉图备份: 将历史位置 {source_active_index} 同步为当前撤销状态（命令数: {len(final_vector_state)}）")
+                        self.backup_pic_list[target_pos] = vector_entry
                 else:
-                    # 没有历史，直接添加
                     print(f"📋 钉图备份: 创建初始矢量状态（{len(final_vector_state)} 命令）")
                     self.backup_pic_list.append(vector_entry)
+                    source_index_map.append(0)
+                    target_pos = len(self.backup_pic_list) - 1
             elif not self.backup_pic_list:
                 # 没有历史记录，创建初始矢量快照（避免 bitmap 复制）
                 print("📋 钉图备份: 创建初始矢量快照")
                 if hasattr(self, 'layer_document'):
                     initial_state = self.layer_document.export_state()
                     self.backup_pic_list.append({"mode": "vector", "state": initial_state})
+                    source_index_map.append(source_active_index if source_active_index >= 0 else 0)
                 else:
                     # 极端回退：无法获取矢量状态，使用 bitmap
                     try:
                         final_pixmap = self.pixmap()
                         if final_pixmap and not final_pixmap.isNull():
                             self.backup_pic_list.append({"mode": "bitmap", "pixmap": final_pixmap.copy()})
+                            source_index_map.append(source_active_index if source_active_index >= 0 else 0)
                         else:
                             print("❌ 钉图备份: 无法获取图像，放弃复制")
                             return
@@ -1134,9 +1286,22 @@ class Freezer(QLabel):
                         print(f"❌ 钉图备份: 创建初始备份失败: {e}")
                         return
 
-            self._trim_history()
-            self.backup_ssid = len(self.backup_pic_list) - 1
-            if not preserve_current_document and self.backup_pic_list:
+            if target_pos is None and source_active_index >= 0 and source_index_map:
+                for pos, idx in enumerate(source_index_map):
+                    if idx > source_active_index:
+                        break
+                    target_pos = pos
+                if target_pos is None and source_index_map:
+                    target_pos = 0
+
+            if self.backup_pic_list:
+                if target_pos is None:
+                    target_pos = len(self.backup_pic_list) - 1
+                self.backup_ssid = max(0, min(target_pos, len(self.backup_pic_list) - 1))
+            else:
+                self.backup_ssid = -1
+
+            if not preserve_current_document and self.backup_pic_list and self.backup_ssid >= 0:
                 self._apply_history_entry(self.backup_pic_list[self.backup_ssid])
             print(f"✅ 钉图备份: 历史复制完成，共 {len(self.backup_pic_list)} 个状态，当前位置: {self.backup_ssid}")
             
@@ -1835,6 +2000,10 @@ class Freezer(QLabel):
         # 任意方式触发的尺寸变化，都同步绘画层
         self._sync_paintlayer_on_resize(self.width(), self.height())
         
+        # 同步 OCR 文字层大小
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            self.ocr_text_layer.setGeometry(0, 0, self.width(), self.height())
+        
         # 更新关闭按钮位置
         self.update_close_button_position()
         
@@ -1848,14 +2017,11 @@ class Freezer(QLabel):
                 self.main_window.position_toolbar_for_pinned_window(self)
         
     def mousePressEvent(self, event):
-        # print(f"钉图鼠标按下调试: 按钮={event.button()}")
-        
-        # 检查是否有主窗口工具栏显示且有绘画工具激活
+        # 先检查是否有绘图工具激活
         has_main_window = self.main_window is not None
         has_mode = hasattr(self.main_window, 'mode') if has_main_window else False
         is_pinned_mode = self.main_window.mode == "pinned" if has_mode else False
         has_painter_tools = hasattr(self.main_window, 'painter_tools') if has_main_window else False
-        # 检查文字工具、画笔工具等是否激活
         has_active_tools = False
         if has_painter_tools:
             tools = self.main_window.painter_tools
@@ -1867,9 +2033,23 @@ class Freezer(QLabel):
                               tools.get('ellipse_on', 0) == 1 or
                               tools.get('line_on', 0) == 1)
         
-        # print(f"钉图鼠标按下调试: 主窗口={has_main_window}, 模式={is_pinned_mode}, 绘图工具={has_active_tools}")
-        # if has_painter_tools:
-        #     print(f"绘图工具状态: {self.main_window.painter_tools}")
+        # 如果有绘图工具激活，优先处理绘图，不检查文字层
+        if not has_active_tools:
+            # 没有绘图工具时，检查 OCR 文字层是否应该处理该事件
+            if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+                # 检查鼠标是否在文字上
+                if self.ocr_text_layer._is_pos_on_text(event.pos()):
+                    # 直接调用文字层的鼠标事件处理
+                    self.ocr_text_layer.mousePressEvent(event)
+                    return
+                else:
+                    # 点击在非文字区域，清除现有选择
+                    if self.ocr_text_layer.selection_start or self.ocr_text_layer.selection_end:
+                        self.ocr_text_layer.clear_selection()
+        
+        # 检查是否有主窗口工具栏显示且有绘画工具激活
+        # has_main_window = self.main_window is not None (已定义)
+        # has_mode, is_pinned_mode, has_painter_tools, has_active_tools 已在上面定义
         
         # 尝试委托给主窗口处理（无论是绘画工具还是选择操作）
         if (has_main_window and has_mode and is_pinned_mode):
@@ -1956,6 +2136,14 @@ class Freezer(QLabel):
             # self.setPixmap(self.pixmap().scaled(self.pixmap().width()/2,self.pixmap().height()/2))
 
     def mouseReleaseEvent(self, event):
+        # 优先检查 OCR 文字层是否应该处理该事件
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            # 检查是否正在选择文字
+            if self.ocr_text_layer.is_selecting:
+                # 直接调用文字层的鼠标释放事件
+                self.ocr_text_layer.mouseReleaseEvent(event)
+                return
+        
         # 检查是否有主窗口工具栏显示且有绘画工具激活，或者正在进行绘画拖拽
         has_active_tools = False
         if (self.main_window and hasattr(self.main_window, 'painter_tools')):
@@ -1991,8 +2179,20 @@ class Freezer(QLabel):
     def underMouse(self) -> bool:
         return super().underMouse()
     def mouseMoveEvent(self, event):
+        # 优先检查 OCR 文字层是否应该处理该事件
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            # 检查是否正在选择文字或鼠标在文字上
+            if self.ocr_text_layer.is_selecting or self.ocr_text_layer._is_pos_on_text(event.pos()):
+                # 直接调用文字层的鼠标移动事件
+                self.ocr_text_layer.mouseMoveEvent(event)
+                # 如果不是正在选择，也要处理窗口的其他逻辑（如显示关闭按钮）
+                if not self.ocr_text_layer.is_selecting:
+                    if hasattr(self, 'close_button') and self.close_button is not None:
+                        self.close_button.show()
+                return
+        
         # 显示关闭按钮（当鼠标在窗口内时）
-        if hasattr(self, 'close_button'):
+        if hasattr(self, 'close_button') and self.close_button is not None:
             self.close_button.show()
         
         # 解析按钮状态
@@ -2020,7 +2220,6 @@ class Freezer(QLabel):
             # 添加标记表示这是来自钉图窗口的委托事件
             main_event._from_pinned_window = True
             main_event._pinned_window_instance = self  # 添加当前钉图窗口引用
-            print(f"钉图委托调试: 调用主窗口mouseMoveEvent，坐标=({event.x()}, {event.y()})")
             self.main_window.mouseMoveEvent(main_event)
             return
             
@@ -2390,6 +2589,24 @@ class Freezer(QLabel):
                 print(f"🧹 [内存清理] 工具栏已清理")
             except Exception as e:
                 print(f"⚠️ 清理工具栏时出错: {e}")
+        
+        # 通知主窗口隐藏钉图工具栏（新版工具栏在主窗口上）
+        # ⚠️ 重要：只有当前钉图窗口是正在编辑的窗口时，才隐藏工具栏
+        # 因为可能有多个钉图窗口，工具栏可能正在编辑另一个窗口
+        if self.main_window and hasattr(self.main_window, 'hide_toolbar_for_pinned_window'):
+            try:
+                # 检查当前窗口是否是主窗口正在编辑的钉图窗口
+                is_current = (hasattr(self.main_window, 'current_pinned_window') and 
+                             self.main_window.current_pinned_window == self)
+                
+                if is_current:
+                    self.main_window.hide_toolbar_for_pinned_window()
+                    print(f"🧹 [内存清理] 已隐藏工具栏 (当前编辑窗口 listpot={self.listpot} 被关闭)")
+                else:
+                    current_window_id = getattr(self.main_window.current_pinned_window, 'listpot', '无') if hasattr(self.main_window, 'current_pinned_window') and self.main_window.current_pinned_window else '无'
+                    print(f"🧹 [内存清理] 跳过隐藏工具栏 (关闭窗口 listpot={self.listpot}, 当前编辑窗口={current_window_id})")
+            except Exception as e:
+                print(f"⚠️ 隐藏主窗口工具栏时出错: {e}")
             
         self.clearMask()
         self.hide()
@@ -2611,6 +2828,12 @@ class Freezer(QLabel):
                 if self in main_window_ref.freeze_imgs:
                     main_window_ref.freeze_imgs.remove(self)
                     print(f"✅ [关闭事件] 已从主窗口列表中移除钉图窗口 (剩余: {len(main_window_ref.freeze_imgs)})")
+                    
+                    # 如果当前窗口是主窗口正在编辑的钉图，需要清除引用
+                    if (hasattr(main_window_ref, 'current_pinned_window') and 
+                        main_window_ref.current_pinned_window == self):
+                        print(f"🧹 [关闭事件] 清除主窗口的 current_pinned_window 引用")
+                        main_window_ref.current_pinned_window = None
                     
                     # 如果这是最后一个窗口，执行深度清理
                     if len(main_window_ref.freeze_imgs) == 0:

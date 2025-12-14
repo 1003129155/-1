@@ -192,7 +192,7 @@ class ToolbarManager:
         
     def init_paint_tools_menu(self):
         """初始化绘画工具二级菜单"""
-        menu_width = 545  # 增加宽度以容纳更多按钮
+        menu_width = 485 # 增加宽度以容纳更多按钮
         menu_height = 55  # 保持高度
         
         # 设置二级菜单的大小和样式 - 白色背景
@@ -223,10 +223,10 @@ class ToolbarManager:
             }
         """)
         
-        # 布局调节控件 - 从左到右：大小调整、透明度调整、颜色自由选择按钮、预设颜色区域
+        # 布局调节控件 - 滑动条竖排，文字数值在右侧
         
-        # 1. 画笔大小滑动条（左边第一组）
-        self.size_slider.setGeometry(5, 25, 80, 18)
+        # 1. 画笔大小滑动条（上方）
+        self.size_slider.setGeometry(5, 8, 80, 18)
         self.size_slider.setOrientation(Qt.Horizontal)
         self.size_slider.setToolTip('ペンのサイズを設定、マウスホイールでも調整可能')
         self.size_slider.valueChanged.connect(self.change_size_fun)
@@ -234,16 +234,16 @@ class ToolbarManager:
         self.size_slider.setValue(5)
         self.size_slider.setMinimum(1)
         
-        self.sizetextlabel.setText("大小")
-        self.sizetextlabel.setGeometry(5, 5, 30, 16)
+        self.sizetextlabel.setText("大小:")
+        self.sizetextlabel.setGeometry(90, 8, 35, 18)
         self.sizetextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         
-        self.size_slider_label.setGeometry(90, 25, 25, 18)
+        self.size_slider_label.setGeometry(125, 8, 25, 18)
         self.size_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         self.size_slider_label.setText("5")
         
-        # 2. 透明度滑动条（左边第二组）
-        self.alpha_slider.setGeometry(130, 25, 80, 18)
+        # 2. 透明度滑动条（下方，与大小滑动条对齐）
+        self.alpha_slider.setGeometry(5, 32, 80, 18)
         self.alpha_slider.setOrientation(Qt.Horizontal)
         self.alpha_slider.setToolTip('ペンの透明度を設定、Ctrl+ホイールでも調整可能')
         self.alpha_slider.valueChanged.connect(self.change_alpha_fun)
@@ -251,16 +251,16 @@ class ToolbarManager:
         self.alpha_slider.setValue(255)
         self.alpha_slider.setMinimum(1)
         
-        self.alphatextlabel.setText("透明度")
-        self.alphatextlabel.setGeometry(130, 5, 50, 16)
+        self.alphatextlabel.setText("透明:")
+        self.alphatextlabel.setGeometry(90, 32, 35, 18)
         self.alphatextlabel.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         
-        self.alpha_slider_label.setGeometry(215, 25, 30, 18)
+        self.alpha_slider_label.setGeometry(125, 32, 30, 18)
         self.alpha_slider_label.setStyleSheet('color: rgb(51,51,51); font-size: 12px;')
         self.alpha_slider_label.setText("255")
         
         # 3. 颜色自由选择按钮（中间）
-        self.choice_clor_btn.setGeometry(255, 9, 40, 40)
+        self.choice_clor_btn.setGeometry(185, 9, 40, 40)
         self.choice_clor_btn.setToolTip('ペンの色を選択')
         self.choice_clor_btn.setIcon(QIcon(resource_path("svg/颜色设置.svg")))
         self.choice_clor_btn.setIconSize(QSize(32, 32))
@@ -268,7 +268,7 @@ class ToolbarManager:
         
         # 4. 设置6个颜色预设按钮 - 水平排列（红、黄、绿、蓝、黑、白）
         preset_btn_size = 34   # 按钮大小
-        preset_start_x = 310   # 起始位置
+        preset_start_x = 240   # 起始位置（向左移动）
         preset_y = 11          # 垂直位置
         preset_spacing = 38    # 按钮间距
         
@@ -889,6 +889,13 @@ class ToolbarManager:
             self.botton_box.hide()
             self.hide_paint_tools_menu()
             
+            # 记录正在关闭的钉图窗口
+            closing_window = getattr(self, 'current_pinned_window', None)
+            if closing_window:
+                print(f"🔧 [工具栏] 隐藏工具栏，当前钉图窗口: listpot={getattr(closing_window, 'listpot', '未知')}")
+            else:
+                print(f"🔧 [工具栏] 隐藏工具栏，无当前钉图窗口")
+            
             # 重置初始化标志，下次显示时可以重新初始化（如果需要）
             if hasattr(self, '_pinned_toolbar_initialized'):
                 self._pinned_toolbar_initialized = False
@@ -1114,7 +1121,8 @@ class ToolbarManager:
                 else:
                     global_menu_rect = expanded_menu_rect
                     
-                if global_menu_rect.contains(cursor_pos):
-                    return True
-                
+                    if global_menu_rect.contains(cursor_pos):
+                        return True
+        
         return False
+

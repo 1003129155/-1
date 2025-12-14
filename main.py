@@ -484,6 +484,46 @@ class ConfigManager:
     def set_pinned_auto_toolbar(self, enabled: bool):
         """设置钉图窗口自动显示工具栏开关"""
         self.settings.setValue('pinned/auto_toolbar', bool(enabled))
+    
+    def get_ocr_enabled(self):
+        """获取 OCR 功能开关状态（默认关闭）"""
+        return self.settings.value('ocr/enabled', False, type=bool)
+    
+    def set_ocr_enabled(self, enabled: bool):
+        """设置 OCR 功能开关状态"""
+        self.settings.setValue('ocr/enabled', bool(enabled))
+    
+    def get_ocr_language(self):
+        """获取 OCR 识别语言（默认日语）"""
+        return self.settings.value('ocr/language', '日本語', type=str)
+    
+    def set_ocr_language(self, language: str):
+        """设置 OCR 识别语言"""
+        self.settings.setValue('ocr/language', language)
+    
+    def get_ocr_grayscale_enabled(self):
+        """获取 OCR 灰度转换开关（默认开启）"""
+        return self.settings.value('ocr/grayscale_enabled', True, type=bool)
+    
+    def set_ocr_grayscale_enabled(self, enabled: bool):
+        """设置 OCR 灰度转换开关"""
+        self.settings.setValue('ocr/grayscale_enabled', bool(enabled))
+    
+    def get_ocr_upscale_enabled(self):
+        """获取 OCR 图像放大开关（默认关闭）"""
+        return self.settings.value('ocr/upscale_enabled', False, type=bool)
+    
+    def set_ocr_upscale_enabled(self, enabled: bool):
+        """设置 OCR 图像放大开关"""
+        self.settings.setValue('ocr/upscale_enabled', bool(enabled))
+    
+    def get_ocr_upscale_factor(self):
+        """获取 OCR 图像放大倍数（默认1.5倍）"""
+        return self.settings.value('ocr/upscale_factor', 1.5, type=float)
+    
+    def set_ocr_upscale_factor(self, factor: float):
+        """设置 OCR 图像放大倍数"""
+        self.settings.setValue('ocr/upscale_factor', float(factor))
 
 
 class SaveThread(QThread):
@@ -960,7 +1000,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.13 | 更新日: 2025.12/09")
+        self.version_label = QLabel("バージョン: 1.14 | 更新日: 2025.12/14")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
