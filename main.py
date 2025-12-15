@@ -471,7 +471,7 @@ class ConfigManager:
     
     def get_show_main_window(self):
         """获取是否显示主界面的开关状态"""
-        return self.settings.value('ui/show_main_window', True, type=bool)
+        return self.settings.value('ui/show_main_window', False, type=bool)  # 默认改为 False (后台启动)
     
     def set_show_main_window(self, enabled):
         """设置是否显示主界面的开关状态"""

@@ -199,6 +199,12 @@ class OCRTextLayer(QWidget):
             self.clear_selection()
             self.setCursor(Qt.ArrowCursor)
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            
+            # ⚠️ 关键：禁用时移除事件过滤器，完全不拦截鼠标事件
+            if self._event_filter_target:
+                self._event_filter_target.removeEventFilter(self)
+                self._event_filter_target = None
+            
             self.hide()
         else:
             # 启用时：检查是否有文字块
@@ -381,6 +387,28 @@ class OCRTextLayer(QWidget):
         
         pos = event.pos()
         
+        # 检查是否在父窗口的按钮上
+        on_button = False
+        if self.parent():
+            # 检查关闭按钮
+            if hasattr(self.parent(), 'close_button') and self.parent().close_button.isVisible():
+                button_rect = self.parent().close_button.geometry()
+                if button_rect.contains(pos):
+                    on_button = True
+            
+            # 检查工具栏切换按钮
+            if not on_button and hasattr(self.parent(), 'toolbar_toggle_button') and self.parent().toolbar_toggle_button.isVisible():
+                button_rect = self.parent().toolbar_toggle_button.geometry()
+                if button_rect.contains(pos):
+                    on_button = True
+        
+        # 如果在按钮上，透传事件并使用普通光标
+        if on_button:
+            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.ArrowCursor)
+            event.ignore()
+            return
+        
         # 拖拽选择模式
         if self.is_selecting:
             # 更新选择终点
@@ -460,6 +488,23 @@ class OCRTextLayer(QWidget):
             return
         
         pos = event.pos()
+        
+        # 检查是否点击在父窗口的按钮上（关闭按钮、工具栏切换按钮等）
+        if self.parent():
+            # 检查关闭按钮
+            if hasattr(self.parent(), 'close_button') and self.parent().close_button.isVisible():
+                button_rect = self.parent().close_button.geometry()
+                if button_rect.contains(pos):
+                    event.ignore()  # 让按钮处理
+                    return
+            
+            # 检查工具栏切换按钮
+            if hasattr(self.parent(), 'toolbar_toggle_button') and self.parent().toolbar_toggle_button.isVisible():
+                button_rect = self.parent().toolbar_toggle_button.geometry()
+                if button_rect.contains(pos):
+                    event.ignore()  # 让按钮处理
+                    return
+        
         self.setFocus()
         
         # 获取点击位置的字符
@@ -516,7 +561,9 @@ class OCRTextLayer(QWidget):
         
         if self.is_selecting:
             self.is_selecting = False
-            self._copy_selected_text()
+            # ⚠️ 不自动复制，用户需要按 Ctrl+C 手动复制
+            # self._copy_selected_text()  # 已移除自动复制
+            print("📝 [OCR文字层] 文字已选中，按 Ctrl+C 复制")
             event.accept()
         else:
             # 透传给父窗口
@@ -635,6 +682,8 @@ class OCRTextLayer(QWidget):
     def keyPressEvent(self, event):
         """键盘事件"""
         if not self._is_active():
+            # ⚠️ 关键：禁用时不处理事件，但要透传给父窗口
+            event.ignore()
             return
         
         # Ctrl+C: 复制

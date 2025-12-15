@@ -655,6 +655,29 @@ class Freezer(QLabel):
             self.paintlayer.setGeometry(0, 0, img.width(), img.height())
         self.paintlayer.show()
         
+        # 创建工具栏切换按钮（只在自动显示工具栏关闭时显示）
+        self.toolbar_toggle_button = QPushButton('🔧', self)
+        self.toolbar_toggle_button.setFixedSize(20, 20)
+        self.toolbar_toggle_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(52, 152, 219, 180);
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: rgba(52, 152, 219, 220);
+            }
+            QPushButton:pressed {
+                background-color: rgba(41, 128, 185, 220);
+            }
+        """)
+        self.toolbar_toggle_button.setToolTip("ツールバーを表示")
+        self.toolbar_toggle_button.clicked.connect(self._toggle_toolbar_button_clicked)
+        self.toolbar_toggle_button.hide()  # 初始隐藏，根据设置和鼠标悬停决定是否显示
+        
         # 创建右上角的关闭按钮
         self.close_button = QPushButton('×', self)
         self.close_button.setFixedSize(20, 20)
@@ -674,12 +697,12 @@ class Freezer(QLabel):
                 background-color: rgba(200, 0, 0, 220);
             }
         """)
-        self.close_button.setToolTip("关闭钉图窗口 (ESC)")
+        self.close_button.setToolTip("閉じる (ESC)")
         self.close_button.clicked.connect(self.close_window_with_esc)
         self.close_button.hide()  # 初始隐藏，鼠标悬停时显示
         
-        # 更新关闭按钮位置
-        self.update_close_button_position()
+        # 更新按钮位置
+        self.update_top_right_buttons_position()
         
         self.show()
         self.drag = self.resize_the_window = False
@@ -729,6 +752,12 @@ class Freezer(QLabel):
         except Exception as e:
             print(f"⚠️ 钉图工具栏设置读取失败: {e}")
         return True
+    
+    def _toggle_toolbar_button_clicked(self):
+        """工具栏切换按钮点击事件"""
+        if self.main_window and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
+            print("🔧 [钉图] 手动显示工具栏")
+            self.main_window.show_toolbar_for_pinned_window(self)
     
     def _check_drawing_status(self) -> bool:
         """检查是否处于绘图模式（供 OCR 文字层回调）"""
@@ -1104,15 +1133,38 @@ class Freezer(QLabel):
         except Exception as e:
             print(f"❌ 钉图缩放: 更新失败: {e}")
     
-    def update_close_button_position(self):
-        """更新关闭按钮的位置到右上角"""
+    def update_top_right_buttons_position(self):
+        """更新右上角按钮（工具栏切换按钮和关闭按钮）的位置"""
+        button_size = 20
+        margin = 5
+        spacing = 8  # 按钮之间的间距（增加到8像素，让按钮更靠左）
+        
+        # 检查是否启用了自动显示工具栏
+        auto_toolbar = self._is_auto_toolbar_enabled()
+        
+        if hasattr(self, 'toolbar_toggle_button'):
+            if auto_toolbar:
+                # 自动显示工具栏时，隐藏切换按钮
+                self.toolbar_toggle_button.hide()
+            # 如果不自动显示，按钮的显示/隐藏由鼠标事件控制
+        
+        # 计算关闭按钮位置（总是在最右边）
         if hasattr(self, 'close_button'):
-            button_size = 20
-            margin = 5
-            x = self.width() - button_size - margin
-            y = margin
-            self.close_button.move(x, y)
+            close_x = self.width() - button_size - margin
+            close_y = margin
+            self.close_button.move(close_x, close_y)
             self.close_button.raise_()  # 确保按钮在最上层
+        
+        # 计算工具栏切换按钮位置（在关闭按钮左边）
+        if hasattr(self, 'toolbar_toggle_button') and not auto_toolbar:
+            toggle_x = self.width() - button_size * 2 - margin - spacing
+            toggle_y = margin
+            self.toolbar_toggle_button.move(toggle_x, toggle_y)
+            self.toolbar_toggle_button.raise_()  # 确保按钮在最上层
+    
+    def update_close_button_position(self):
+        """向后兼容的函数，调用新的按钮位置更新函数"""
+        self.update_top_right_buttons_position()
     
     def close_window_with_esc(self):
         """模拟ESC键关闭窗口"""
@@ -1478,6 +1530,16 @@ class Freezer(QLabel):
         saveaction = menu.addAction('名前を付けて保存')
         copyaction = menu.addAction('コピー')
         # ocrAction = menu.addAction('文字認識')  # OCR功能已删除，注释掉此按钮
+        
+        # OCR 文字层开关
+        ocrLayerAction = None
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            ocrLayerAction = menu.addAction('OCR文字選択')
+            ocrLayerAction.setCheckable(True)
+            # 检查当前 OCR 文字层是否启用
+            is_enabled = self.ocr_text_layer.enabled if hasattr(self.ocr_text_layer, 'enabled') else True
+            ocrLayerAction.setChecked(is_enabled)
+        
         paintaction = None
         if not self._is_auto_toolbar_enabled():
             paintaction = menu.addAction('ツールバー')
@@ -1599,6 +1661,13 @@ class Freezer(QLabel):
         #     self.tips_shower.set_pos(self.x(),self.y())
         #     # 移除了文字识别中提示
         #     self.ocr()
+        elif ocrLayerAction and action == ocrLayerAction:
+            # 切换 OCR 文字层的启用状态
+            if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+                new_state = ocrLayerAction.isChecked()
+                self.ocr_text_layer.set_enabled(new_state)
+                status_text = "启用" if new_state else "禁用"
+                print(f"{'✅' if new_state else '❌'} [OCR] OCR 文字层已{status_text}")
         elif paintaction and action == paintaction:
             if self.main_window and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
                 print("🎨 通过右键菜单手动显示钉图工具栏")
@@ -2037,15 +2106,17 @@ class Freezer(QLabel):
         if not has_active_tools:
             # 没有绘图工具时，检查 OCR 文字层是否应该处理该事件
             if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
-                # 检查鼠标是否在文字上
-                if self.ocr_text_layer._is_pos_on_text(event.pos()):
-                    # 直接调用文字层的鼠标事件处理
-                    self.ocr_text_layer.mousePressEvent(event)
-                    return
-                else:
-                    # 点击在非文字区域，清除现有选择
-                    if self.ocr_text_layer.selection_start or self.ocr_text_layer.selection_end:
-                        self.ocr_text_layer.clear_selection()
+                # ⚠️ 关键：只有在 OCR 文字层启用时才检查和处理文字事件
+                if self.ocr_text_layer._is_active():
+                    # 检查鼠标是否在文字上
+                    if self.ocr_text_layer._is_pos_on_text(event.pos()):
+                        # 直接调用文字层的鼠标事件处理
+                        self.ocr_text_layer.mousePressEvent(event)
+                        return
+                    else:
+                        # 点击在非文字区域，清除现有选择
+                        if self.ocr_text_layer.selection_start or self.ocr_text_layer.selection_end:
+                            self.ocr_text_layer.clear_selection()
         
         # 检查是否有主窗口工具栏显示且有绘画工具激活
         # has_main_window = self.main_window is not None (已定义)
@@ -2138,8 +2209,8 @@ class Freezer(QLabel):
     def mouseReleaseEvent(self, event):
         # 优先检查 OCR 文字层是否应该处理该事件
         if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
-            # 检查是否正在选择文字
-            if self.ocr_text_layer.is_selecting:
+            # ⚠️ 关键：只有在 OCR 文字层启用且正在选择时才处理
+            if self.ocr_text_layer._is_active() and self.ocr_text_layer.is_selecting:
                 # 直接调用文字层的鼠标释放事件
                 self.ocr_text_layer.mouseReleaseEvent(event)
                 return
@@ -2179,17 +2250,22 @@ class Freezer(QLabel):
     def underMouse(self) -> bool:
         return super().underMouse()
     def mouseMoveEvent(self, event):
-        # 优先检查 OCR 文字层是否应该处理该事件
-        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
-            # 检查是否正在选择文字或鼠标在文字上
-            if self.ocr_text_layer.is_selecting or self.ocr_text_layer._is_pos_on_text(event.pos()):
-                # 直接调用文字层的鼠标移动事件
-                self.ocr_text_layer.mouseMoveEvent(event)
-                # 如果不是正在选择，也要处理窗口的其他逻辑（如显示关闭按钮）
-                if not self.ocr_text_layer.is_selecting:
-                    if hasattr(self, 'close_button') and self.close_button is not None:
-                        self.close_button.show()
-                return
+        # ⚠️ 性能优化：拖动或调整大小时，跳过 OCR 文字层检查
+        # 避免在拖动过程中调用 _is_pos_on_text() 导致卡顿
+        if not (self.drag or self.resize_the_window):
+            # 只有在非拖动/调整大小状态下才检查 OCR 文字层
+            if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+                # ⚠️ 关键：只有在 OCR 文字层启用时才检查和处理
+                if self.ocr_text_layer._is_active():
+                    # 检查是否正在选择文字或鼠标在文字上
+                    if self.ocr_text_layer.is_selecting or self.ocr_text_layer._is_pos_on_text(event.pos()):
+                        # 直接调用文字层的鼠标移动事件
+                        self.ocr_text_layer.mouseMoveEvent(event)
+                        # 如果不是正在选择，也要处理窗口的其他逻辑（如显示关闭按钮）
+                        if not self.ocr_text_layer.is_selecting:
+                            if hasattr(self, 'close_button') and self.close_button is not None:
+                                self.close_button.show()
+                        return
         
         # 显示关闭按钮（当鼠标在窗口内时）
         if hasattr(self, 'close_button') and self.close_button is not None:
@@ -2332,11 +2408,24 @@ class Freezer(QLabel):
             if self.hide_timer.isActive():
                 print("🕐 鼠标重新进入，停止延迟隐藏定时器")
                 self.hide_timer.stop()
+        
+        # 显示右上角按钮
+        if hasattr(self, 'close_button') and self.close_button is not None:
+            self.close_button.show()
+            self.close_button.raise_()  # 确保按钮在最上层，不被 OCR 文字层遮挡
+        
+        # 只在自动工具栏关闭时显示工具栏切换按钮
+        auto_toolbar = self._is_auto_toolbar_enabled()
+        if hasattr(self, 'toolbar_toggle_button') and self.toolbar_toggle_button is not None:
+            if not auto_toolbar:
+                self.toolbar_toggle_button.show()
+                self.toolbar_toggle_button.raise_()  # 确保按钮在最上层，不被 OCR 文字层遮挡
+        
         # 如果右键菜单正在显示，不触发工具栏重新布局
         if getattr(self, '_context_menu_active', False):
             return
             
-        if not self._is_auto_toolbar_enabled():
+        if not auto_toolbar:
             return
 
         # 只有在工具栏未显示时才显示工具栏，避免重复初始化导致二级菜单被隐藏
@@ -2356,9 +2445,11 @@ class Freezer(QLabel):
     def leaveEvent(self,e):
         super().leaveEvent(e)
         
-        # 隐藏关闭按钮（当鼠标离开窗口时）
+        # 隐藏右上角按钮（当鼠标离开窗口时）
         if hasattr(self, 'close_button') and self.close_button is not None:
             self.close_button.hide()
+        if hasattr(self, 'toolbar_toggle_button') and self.toolbar_toggle_button is not None:
+            self.toolbar_toggle_button.hide()
         
         # 如果右键菜单正在显示，不启动计时器
         if not getattr(self, '_context_menu_active', False):
