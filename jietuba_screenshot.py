@@ -21,10 +21,9 @@ import sys
 import time
 import ctypes
 from ctypes import wintypes
-from collections import deque
 from PyQt5.QtCore import QPoint, QPointF, QRectF, QMimeData, QSize, QBuffer, QIODevice
 from PyQt5.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
-from PyQt5.QtGui import QCursor, QBrush, QScreen, QWindow
+from PyQt5.QtGui import QCursor, QBrush, QScreen, QWindow, QTransform
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QIcon, QFont, QImage, QColor, QPolygon
 from PyQt5.QtWidgets import *  # 包含 QFrame 以支持透明输入框无边框设置
 from jietuba_widgets import Freezer
@@ -64,46 +63,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.screenshot_save_dir = get_screenshot_save_dir()
         
         # self.pixmap()=QPixmap()
-        # 立即初始化选区相关状态，防止在 setup/init_parameters 之前被事件访问
-        self.selection_active = False
-        self.selection_rect = QRect(-1, -1, 0, 0)
-        self.selection_pixmap = None
-        self.selection_scaled_pixmap = None
-        self.selection_original_rect = QRect(-1, -1, 0, 0)
-        self.selection_dragging = False
-        self.selection_resize_edge = None
-        self.selection_press_offset = QPoint(0, 0)
-        self.selection_press_pos = QPoint(0, 0)
-        self.selection_press_rect = QRect(-1, -1, 0, 0)
-        self.selection_mask = None
         self.left_button_push = False
-
-    def _ensure_selection_state(self):
-        """兜底：若因早期事件导致属性缺失则补齐。"""
-        if not hasattr(self, 'selection_active'):
-            self.selection_active = False
-        if not hasattr(self, 'selection_rect'):
-            self.selection_rect = QRect(-1, -1, 0, 0)
-        if not hasattr(self, 'selection_pixmap'):
-            self.selection_pixmap = None
-        if not hasattr(self, 'selection_scaled_pixmap'):
-            self.selection_scaled_pixmap = None
-        if not hasattr(self, 'selection_original_rect'):
-            self.selection_original_rect = QRect(-1, -1, 0, 0)
-        if not hasattr(self, 'selection_dragging'):
-            self.selection_dragging = False
-        if not hasattr(self, 'selection_resize_edge'):
-            self.selection_resize_edge = None
-        if not hasattr(self, 'selection_press_offset'):
-            self.selection_press_offset = QPoint(0, 0)
-        if not hasattr(self, 'selection_press_pos'):
-            self.selection_press_pos = QPoint(0, 0)
-        if not hasattr(self, 'selection_press_rect'):
-            self.selection_press_rect = QRect(-1, -1, 0, 0)
-        if not hasattr(self, 'selection_mask'):
-            self.selection_mask = None
-        if not hasattr(self, 'left_button_push'):
-            self.left_button_push = False
 
     def setup(self,mode = "screenshot"):  # 初始化界面
         self.on_init = True
@@ -471,6 +431,15 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self._normalized_vector_width(size),
             )
             self._vector_dirty = True
+            
+            # 自动选中刚绘制的序号
+            last_index = len(doc.commands) - 1
+            if last_index >= 0:
+                self.selected_command_index = last_index
+                if hasattr(self, 'paintlayer'):
+                    self.paintlayer.update()
+                print(f"🎯 [自动选中] 序号绘制完成，自动选中对象 {last_index}")
+                
         except Exception as e:
             print(f"⚠️ [矢量捕获] 记录序号失败: {e}")
 
@@ -566,6 +535,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     "color": tuple(raw.get("color", (255, 0, 0, 255))),
                     "blend": raw.get("blend", "normal"),
                     "extra": dict(raw.get("extra", {})),
+                    "rotation": raw.get("rotation", 0.0),
+                    "scale": raw.get("scale", 1.0),
                 }
             )
         return filtered
@@ -2977,150 +2948,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # self.close()
 
     # =====================
-    # 已绘制文字区域二次编辑（选中/移动/缩放）辅助方法
-    # =====================
-    def _hit_test_selection_handle(self, x, y):
-        # 兜底确保状态存在
-        self._ensure_selection_state()
-        if not getattr(self, 'selection_active', False):
-            return None
-        r = self.selection_rect
-        handle = 6
-        # 八个手柄区域
-        cx = r.x() + r.width() // 2
-        cy = r.y() + r.height() // 2
-        areas = {
-            'tl': QRect(r.left()-handle//2, r.top()-handle//2, handle, handle),
-            't':  QRect(cx-handle//2, r.top()-handle//2, handle, handle),
-            'tr': QRect(r.right()-handle//2, r.top()-handle//2, handle, handle),
-            'l':  QRect(r.left()-handle//2, cy-handle//2, handle, handle),
-            'r':  QRect(r.right()-handle//2, cy-handle//2, handle, handle),
-            'bl': QRect(r.left()-handle//2, r.bottom()-handle//2, handle, handle),
-            'b':  QRect(cx-handle//2, r.bottom()-handle//2, handle, handle),
-            'br': QRect(r.right()-handle//2, r.bottom()-handle//2, handle, handle),
-        }
-        pt = QPoint(x, y)
-        for k, a in areas.items():
-            if a.contains(pt):
-                return k
-        if r.contains(pt):
-            return 'move'
-        return None
-
-    def _begin_selection_at(self, x, y):
-        """从绘画层pixmap的alpha通道出发，提取点击处连通区域为选区。"""
-        pl_pm = self.paintlayer.pixmap()
-        if pl_pm is None or pl_pm.isNull():
-            return False
-        if not (0 <= x < pl_pm.width() and 0 <= y < pl_pm.height()):
-            return False
-        img = pl_pm.toImage().convertToFormat(QImage.Format_ARGB32)
-        col = QColor(img.pixelColor(x, y))
-        if col.alpha() < 10:
-            return False  # 点击在透明处，不进入选择
-
-        w, h = img.width(), img.height()
-        visited = set()
-        q = deque()
-        q.append((x, y))
-        visited.add((x, y))
-        minx = maxx = x
-        miny = maxy = y
-        # 4邻域泛洪
-        while q:
-            cx, cy = q.popleft()
-            # 更新边界
-            if cx < minx: minx = cx
-            if cx > maxx: maxx = cx
-            if cy < miny: miny = cy
-            if cy > maxy: maxy = cy
-            for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < w and 0 <= ny < h and (nx, ny) not in visited:
-                    if QColor(img.pixelColor(nx, ny)).alpha() >= 10:
-                        visited.add((nx, ny))
-                        q.append((nx, ny))
-
-        # 构造选区矩形（加1，因为像素是包含性的）
-        rect = QRect(minx, miny, max(1, (maxx - minx + 1)), max(1, (maxy - miny + 1)))
-        if rect.width() <= 0 or rect.height() <= 0:
-            return False
-
-        # 生成选区图像（裁剪矩形区域）
-        sel_pm = pl_pm.copy(rect)
-
-        # 将选区像素从原绘画层抠掉（置透明）
-        mod = img
-        for (px, py) in visited:
-            mod.setPixelColor(px, py, QColor(0, 0, 0, 0))
-        new_pm = QPixmap(w, h)
-        new_pm.fill(Qt.transparent)
-        painter = QPainter(new_pm)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawImage(0, 0, mod)
-        painter.end()
-        self.paintlayer.setPixmap(new_pm)
-
-        # 保存状态
-        self.selection_active = True
-        self.selection_rect = rect
-        self.selection_original_rect = QRect(rect)
-        self.selection_pixmap = sel_pm
-        self.selection_scaled_pixmap = QPixmap(sel_pm)  # 初始未缩放
-        # 保存像素mask（相对rect左上）
-        self.selection_mask = {(px - rect.left(), py - rect.top()) for (px, py) in visited}
-        self.selection_dragging = False
-        self.selection_resize_edge = None
-        self.selection_press_rect = QRect(rect)
-        self.selection_press_pos = QPoint(x, y)
-        self.selection_press_offset = QPoint(x - rect.left(), y - rect.top())
-        self.paintlayer.update()
-        return True
-
-    def _update_selection_preview(self):
-        # 预览位图按当前rect尺寸缩放
-        if self.selection_pixmap and self.selection_rect.width() > 0 and self.selection_rect.height() > 0:
-            self.selection_scaled_pixmap = self.selection_pixmap.scaled(
-                self.selection_rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-            self.paintlayer.update()
-
-    def _commit_selection(self):
-        if not self.selection_active or self.selection_pixmap is None:
-            return
-        # 把当前预览（可能缩放后）绘制回绘画层
-        base = self.paintlayer.pixmap()
-        if base is None or base.isNull():
-            base = QPixmap(self.width(), self.height())
-            base.fill(Qt.transparent)
-        painter = QPainter(base)
-        painter.setRenderHint(QPainter.Antialiasing)
-        # 如有缩放则使用缩放后的位图
-        pm = self.selection_scaled_pixmap if self.selection_scaled_pixmap is not None else self.selection_pixmap
-        painter.drawPixmap(self.selection_rect.topLeft(), pm)
-        painter.end()
-        self.paintlayer.setPixmap(base)
-        # 结束选择并纳入撤销
-        self.selection_active = False
-        self.paintlayer.update()
-        self.backup_shortshot()
-
-    def _cancel_selection(self):
-        # 取消：将原来的选区位图回填到原位置
-        if not self.selection_active or self.selection_pixmap is None:
-            self.selection_active = False
-            self.paintlayer.update()
-            return
-        base = self.paintlayer.pixmap()
-        if base is None or base.isNull():
-            base = QPixmap(self.width(), self.height())
-            base.fill(Qt.transparent)
-        painter = QPainter(base)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(self.selection_original_rect.topLeft(), self.selection_pixmap)
-        painter.end()
-        self.paintlayer.setPixmap(base)
-        self.selection_active = False
-        self.paintlayer.update()
+    # 已绘制文字区域二次编辑功能已移除
 
     def mouseDoubleClickEvent(self, e):  # 双击
         if e.button() == Qt.LeftButton:
@@ -3284,6 +3112,52 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.update()
         return True
 
+    def _hit_test_handles(self, pos):
+        if not hasattr(self, 'selected_command_index') or self.selected_command_index is None:
+            return None
+            
+        index = self.selected_command_index
+        if not hasattr(self, 'paintlayer') or not hasattr(self.paintlayer, 'document') or self.paintlayer.document is None:
+            return None
+            
+        if not (0 <= index < len(self.paintlayer.document.commands)):
+            return None
+            
+        cmd = self.paintlayer.document.commands[index]
+        # 使用未变换的矩形，因为我们会手动应用变换
+        rect = self.paintlayer.document.get_command_rect_untransformed(index)
+        if not rect:
+            return None
+            
+        w, h = self.paintlayer.width(), self.paintlayer.height()
+        center = self.paintlayer.document._get_command_center(cmd, w, h)
+        
+        transform = QTransform()
+        transform.translate(center.x(), center.y())
+        transform.rotate(cmd.rotation)
+        transform.scale(cmd.scale, cmd.scale)
+        transform.translate(-center.x(), -center.y())
+        
+        # Check rotation handle
+        top_center = (rect.topLeft() + rect.topRight()) / 2
+        rotation_handle_pos = top_center - QPointF(0, 20)
+        p_rot = transform.map(rotation_handle_pos)
+        
+        diff = pos - p_rot
+        if (diff.x()**2 + diff.y()**2) < 100: # 10px radius
+            return 'rotate'
+            
+        # Check scale handles
+        corners = [rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()]
+        transformed_corners = [transform.map(p) for p in corners]
+        
+        for p in transformed_corners:
+            diff = pos - p
+            if (diff.x()**2 + diff.y()**2) < 100:
+                return 'scale'
+                
+        return None
+
     def mousePressEvent(self, event):
         # 如果是钉图模式并且有绘图工具激活，检查事件是否来自钉图窗口的委托
         if hasattr(self, 'mode') and self.mode == "pinned" and 1 in self.painter_tools.values():
@@ -3295,19 +3169,70 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 print("主窗口鼠标按下调试: 收到钉图窗口委托事件")
 
         if event.button() == Qt.LeftButton:  # 按下了左键
+            # ------------------------------------------------------------------
+            # 0. 优先处理：旋转与缩放手柄
+            # ------------------------------------------------------------------
+            handle_mode = self._hit_test_handles(event.pos())
+            if handle_mode:
+                self.interaction_mode = handle_mode
+                self.last_mouse_pos = event.pos()
+                self.left_button_push = True
+                
+                # 记录状态用于撤销
+                if hasattr(self.paintlayer.document, 'export_state'):
+                    self.state_before_move = self.paintlayer.document.export_state()
+                
+                print(f"🖱️ [交互] 开始 {handle_mode}")
+                return
+
+            # ------------------------------------------------------------------
+            # 1. 优先处理：对象选择与移动 (Ctrl键 或 刚画完选中)
+            # ------------------------------------------------------------------
+            is_ctrl_pressed = (event.modifiers() & Qt.ControlModifier)
+            
+            # 尝试命中测试
+            hit_index = -1
+            if is_ctrl_pressed or (hasattr(self, 'selected_command_index') and self.selected_command_index is not None):
+                if hasattr(self, 'paintlayer') and hasattr(self.paintlayer, 'document') and self.paintlayer.document is not None:
+                    # 转换坐标到 paintlayer 坐标系 (如果是钉图模式，可能需要转换)
+                    # 这里假设 event.pos() 已经是相对于 paintlayer 的坐标 (如果是委托事件，通常已经转换过)
+                    # 但如果是主窗口事件，paintlayer 铺满窗口，所以 event.pos() 也是对的
+                    
+                    # 注意：hit_test 需要屏幕坐标，内部会归一化
+                    hit_index = self.paintlayer.document.hit_test(event.pos())
+            
+            # 如果命中了对象
+            if hit_index != -1:
+                # 如果是 Ctrl 键按下，或者点击的是当前已选中的对象 -> 进入移动模式
+                if is_ctrl_pressed or hit_index == self.selected_command_index:
+                    self.selected_command_index = hit_index
+                    self.is_moving_object = True
+                    self.move_start_pos = event.pos()
+                    self.last_move_pos = event.pos()  # 初始化上一次移动位置
+                    self.left_button_push = True # 保持按下状态
+                    
+                    # 记录移动前的状态用于撤销
+                    if hasattr(self.paintlayer.document, 'export_state'):
+                        self.state_before_move = self.paintlayer.document.export_state()
+                    
+                    self.paintlayer.update() # 触发重绘以显示选中框
+                    print(f"🖱️ [对象移动] 选中对象 {hit_index}, 开始移动")
+                    return
+
+            # 如果没命中，但之前有选中对象 -> 取消选中
+            if hasattr(self, 'selected_command_index') and self.selected_command_index is not None:
+                self.selected_command_index = None
+                self.paintlayer.update()
+                print("🖱️ [对象移动] 取消选中")
+                # 如果只是为了取消选中，不应该继续触发绘制
+                # 但如果用户想直接开始画新图，则继续往下走
+
+            # ------------------------------------------------------------------
+            # 2. 原有逻辑：绘制与选区
+            # ------------------------------------------------------------------
+            
             # 通用：若当前没有选区，且未在输入文字框时，尝试直接点击已绘制像素进入选区模式
             # 条件：未激活任何绘图工具 或 激活的是文字工具（便于二次调整）
-            try:
-                no_tool_active = not (1 in self.painter_tools.values())
-                text_tool_active = bool(self.painter_tools.get('drawtext_on'))
-                text_box_visible = hasattr(self, 'text_box') and self.text_box.isVisible()
-                if not self.selection_active and not text_box_visible and (no_tool_active or text_tool_active):
-                    if self._begin_selection_at(event.x(), event.y()):
-                        self.selection_dragging = False  # 初次只是选中，不立即移动
-                        print(f"[选区] 直接点击像素进入选中 rect={self.selection_rect}")
-                        return
-            except Exception as e:
-                print(f"[选区] 快速选中尝试异常: {e}")
             self.left_button_push = True
             print(f"主窗口鼠标按下调试: 设置left_button_push=True")
             
@@ -3315,22 +3240,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if hasattr(self, 'mode') and self.mode == "pinned":
                 print(f"钉图鼠标按下调试: 有绘图工具={1 in self.painter_tools.values()}, _from_pinned_window={hasattr(event, '_from_pinned_window')}")
             
-            # 若已存在选区，优先处理选区的移动/缩放
-            if getattr(self, 'selection_active', False):
-                handle = self._hit_test_selection_handle(event.x(), event.y())
-                if handle:
-                    self.selection_press_rect = QRect(self.selection_rect)
-                    self.selection_press_pos = QPoint(event.x(), event.y())
-                    if handle == 'move':
-                        self.selection_dragging = True
-                        self.selection_resize_edge = None
-                        self.selection_press_offset = QPoint(event.x() - self.selection_rect.left(),
-                                                             event.y() - self.selection_rect.top())
-                    else:
-                        self.selection_resize_edge = handle
-                        self.selection_dragging = False
-                    return
-
             if 1 in self.painter_tools.values():  # 如果有绘图工具打开了,说明正在绘图
                 # 处理坐标，区分是否来自钉图窗口委托
                 if hasattr(event, '_from_pinned_window') and hasattr(self, 'mode') and self.mode == "pinned":
@@ -3358,31 +3267,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     print(f"钉图圆形调试: 设置起始点 [{press_x}, {press_y}]")
                     # self.drawcircle_pointlist[0] = [event.x(), event.y()]
                 elif self.painter_tools['drawtext_on']:
-                    # 文本工具：点击已绘制像素 -> 进入选区编辑；否则创建输入框
-                    # 优先命中现有选区的手柄/移动
-                    handle = self._hit_test_selection_handle(press_x, press_y)
-                    if handle:
-                        self.selection_press_rect = QRect(self.selection_rect)
-                        self.selection_press_pos = QPoint(press_x, press_y)
-                        if handle == 'move':
-                            self.selection_dragging = True
-                            self.selection_resize_edge = None
-                            self.selection_press_offset = QPoint(press_x - self.selection_rect.left(),
-                                                                 press_y - self.selection_rect.top())
-                        else:
-                            self.selection_resize_edge = handle
-                            self.selection_dragging = False
-                        return
-                    # 未有选区则尝试从绘画层提取点击处的连通像素作为选区
-                    if not self.selection_active:
-                        if self._begin_selection_at(press_x, press_y):
-                            # 初始化拖动
-                            self.selection_dragging = True
-                            self.selection_press_rect = QRect(self.selection_rect)
-                            self.selection_press_pos = QPoint(press_x, press_y)
-                            self.selection_press_offset = QPoint(press_x - self.selection_rect.left(),
-                                                                 press_y - self.selection_rect.top())
-                            return
+                    # 文本工具：仅创建新的文字输入框
                     # 检查是否已经有文字输入框在显示
                     if hasattr(self, 'text_box') and self.text_box.isVisible():
                         # 检查输入框中是否有文字内容
@@ -3598,15 +3483,70 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 return  # 如果不是委托事件，直接返回
         
         if event.button() == Qt.LeftButton:
-            # 1. 处理选区编辑结束
-            if getattr(self, 'selection_active', False) and (self.selection_dragging or self.selection_resize_edge):
-                self.selection_dragging = False
-                self.selection_resize_edge = None
-                self._update_selection_preview()
-                self._commit_selection()
+            # ------------------------------------------------------------------
+            # 0. 优先处理：旋转与缩放结束
+            # ------------------------------------------------------------------
+            if hasattr(self, 'interaction_mode') and self.interaction_mode in ('rotate', 'scale'):
+                # 🚀 交互结束时才重新渲染整个矢量文档
+                self._refresh_paintlayer_from_vector()
+                
+                self.interaction_mode = None
+                self.left_button_push = False
+                
+                if hasattr(self, 'state_before_move') and self.state_before_move:
+                    print(f"🖱️ [交互] 结束，触发备份")
+                    if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
+                            if hasattr(self.current_pinned_window, 'backup_shortshot'):
+                                self.current_pinned_window.backup_shortshot()
+                    else:
+                        self.backup_shortshot()
+                    
+                    self.state_before_move = None
                 return
+
+            # ------------------------------------------------------------------
+            # 1. 优先处理：对象移动结束
+            # ------------------------------------------------------------------
+            if hasattr(self, 'is_moving_object') and self.is_moving_object:
+                # 🚀 移动结束时才重新渲染整个矢量文档
+                self._refresh_paintlayer_from_vector()
+                
+                self.is_moving_object = False
+                self.left_button_push = False
+                
+                # 检查是否真的移动了
+                if hasattr(self, 'state_before_move') and self.state_before_move:
+                    # 备份移动前的状态到撤销栈
+                    # 注意：这里需要特殊的备份逻辑，因为 backup_shortshot 通常是备份当前状态
+                    # 我们需要把 state_before_move 作为“上一步”存进去
+                    
+                    # 简单起见，我们直接调用 backup_shortshot()，它会保存当前（移动后）的状态
+                    # 这样撤销时会回到上一个状态（即移动前）
+                    # 但前提是移动前已经有过备份。
+                    # 更严谨的做法是：在移动开始前不备份，移动结束后，如果确实发生了移动，则触发一次备份
+                    
+                    # 检查是否有位移
+                    current_state = self.paintlayer.document.export_state()
+                    if current_state != self.state_before_move:
+                        print("🖱️ [对象移动] 移动结束，触发备份")
+                        
+                        # 针对钉图窗口的特殊处理
+                        if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
+                             if hasattr(self.current_pinned_window, 'backup_shortshot'):
+                                self.current_pinned_window.backup_shortshot()
+                        else:
+                            self.backup_shortshot()
+                    else:
+                        print("🖱️ [对象移动] 未发生位移，忽略备份")
+                    
+                    self.state_before_move = None
+                return
+
+            # ------------------------------------------------------------------
+            # 2. 原有逻辑
+            # ------------------------------------------------------------------
             
-            # 2. 智能选区确认:点击未拖动 + 智能选区开启
+            # 1. 智能选区确认:点击未拖动 + 智能选区开启
             if self._should_confirm_smart_selection():
                 print("🎯 [智能选区] 确认选区")
                 self.finding_rect = False
@@ -3614,14 +3554,14 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.choice()
                 return
             
-            # 3. 取消操作：点击未拖动 + 不满足智能选区条件
+            # 2. 取消操作：点击未拖动 + 不满足智能选区条件
             if self._should_cancel_selection():
                 print("🎯 [手动选区] 取消操作（未拖动）")
                 self.NpainterNmoveFlag = False
                 self.left_button_push = False
                 return
             
-            # 4. 处理绘图工具松开
+            # 3. 处理绘图工具松开
             self.left_button_push = False
             if 1 in self.painter_tools.values():  # 绘图工具松开
                 should_backup = False  # 添加备份控制标志
@@ -3669,6 +3609,10 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         print(f"矩形撤销调试: 检测到有效绘制，等待paintEvent完成后备份")
                     else:
                         print(f"矩形撤销调试: 移动距离太小，不进行备份")
+                        # 清除无效的绘制点，防止残留
+                        self.drawrect_pointlist = [[0, 0], [0, 0], 0]
+                        self.update()
+                        return # 直接返回，不执行后续的自动选中逻辑
                 elif self.painter_tools['drawarrow_on']:
                     self.drawarrow_pointlist[1] = [event.x(), event.y()]
                     self.drawarrow_pointlist[2] = 1
@@ -3681,6 +3625,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         print(f"箭头撤销调试: 检测到有效绘制，等待paintEvent完成后备份")
                     else:
                         print(f"箭头撤销调试: 移动距离太小，不进行备份")
+                        self.drawarrow_pointlist = [[0, 0], [0, 0], 0]
+                        self.update()
+                        return
                 elif self.painter_tools['drawnumber_on']:
                     # 序号工具：鼠标释放时立即添加序号
                     self.drawnumber_pointlist[1] = 1  # 激活状态
@@ -3699,6 +3646,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         print(f"圆形撤销调试: 检测到有效绘制，等待paintEvent完成后备份")
                     else:
                         print(f"圆形撤销调试: 移动距离太小，不进行备份")
+                        self.drawcircle_pointlist = [[0, 0], [0, 0], 0]
+                        self.update()
+                        return
                 elif self.painter_tools['drawtext_on']:
 
                     print(f"文字撤销调试: 文字工具点击，等待文字输入确认")
@@ -3753,6 +3703,20 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         self.backup_shortshot()
                         print(f"撤销系统: 备份完成，当前步骤: {self.backup_ssid}")
                     self._last_tool_commit = None
+                    
+                    # ------------------------------------------------------------------
+                    # 3. 绘制完成后，自动选中刚绘制的对象 (Hot State)
+                    # ------------------------------------------------------------------
+                    # 排除画笔和荧光笔（用户反馈不希望这两个工具自动跳出选框）
+                    is_brush = self.painter_tools.get('pen_on', False) or self.painter_tools.get('highlight_on', False)
+                    
+                    if not is_brush and hasattr(self, 'paintlayer') and hasattr(self.paintlayer, 'document') and self.paintlayer.document is not None:
+                        # 获取最后一个命令的索引
+                        last_index = len(self.paintlayer.document.commands) - 1
+                        if last_index >= 0:
+                            self.selected_command_index = last_index
+                            self.paintlayer.update()
+                            print(f"🎯 [自动选中] 绘制完成，自动选中对象 {last_index}")
                 else:
                     if getattr(self, '_last_tool_commit', None) == 'text':
                         print("撤销系统: 文字矢量已提交，由目标窗口维护历史")
@@ -3780,12 +3744,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # self.sure_btn.show()
             
         elif event.button() == Qt.RightButton:  # 右键 - 统一行为：直接退出截图
-            # 若有选区则取消并还原
-            if getattr(self, 'selection_active', False):
-                self._cancel_selection()
-                return
-            
-
             try:
                 if not QSettings('Fandes', 'jietuba').value("S_SIMPLE_MODE", False, bool):
                     # 检查主窗口截图前的可见状态，只有原本可见才显示
@@ -3801,6 +3759,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # 如果是钉图模式，也需要更新钉图窗口
             if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
                 self.current_pinned_window.update()
+
                 
     # 鼠标滑轮事件
     def wheelEvent(self, event):
@@ -3846,50 +3805,70 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if not hasattr(event, '_from_pinned_window'):
                 return  # 如果不是委托事件，直接返回
         
+        # ------------------------------------------------------------------
+        # 0. 优先处理：旋转与缩放
+        # ------------------------------------------------------------------
+        if hasattr(self, 'interaction_mode') and self.interaction_mode in ('rotate', 'scale'):
+            if hasattr(self, 'last_mouse_pos') and self.last_mouse_pos:
+                if not (hasattr(self, 'paintlayer') and hasattr(self.paintlayer, 'document') and self.paintlayer.document is not None):
+                    return
+                cmd = self.paintlayer.document.commands[self.selected_command_index]
+                w, h = self.paintlayer.width(), self.paintlayer.height()
+                center = self.paintlayer.document._get_command_center(cmd, w, h)
+                
+                if self.interaction_mode == 'rotate':
+                    v1 = self.last_mouse_pos - center
+                    v2 = event.pos() - center
+                    angle1 = math.atan2(v1.y(), v1.x())
+                    angle2 = math.atan2(v2.y(), v2.x())
+                    delta_angle = math.degrees(angle2 - angle1)
+                    cmd.rotation += delta_angle
+                    
+                elif self.interaction_mode == 'scale':
+                    # Use Euclidean distance for smoother scaling
+                    d1 = math.sqrt((self.last_mouse_pos.x() - center.x())**2 + (self.last_mouse_pos.y() - center.y())**2)
+                    d2 = math.sqrt((event.pos().x() - center.x())**2 + (event.pos().y() - center.y())**2)
+                    if d1 > 0:
+                        ratio = d2 / d1
+                        cmd.scale *= ratio
+                
+                self.last_mouse_pos = event.pos()
+                # 🚀 性能优化：交互期间只更新显示，不重新渲染整个矢量文档
+                # _refresh_paintlayer_from_vector() 会在 mouseReleaseEvent 中调用
+                self.paintlayer.update()
+                self.update() # Update handles
+                
+                if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
+                    self.current_pinned_window.update()
+            return
+
+        # ------------------------------------------------------------------
+        # 1. 优先处理：对象移动
+        # ------------------------------------------------------------------
+        if hasattr(self, 'is_moving_object') and self.is_moving_object:
+            if hasattr(self, 'last_move_pos') and self.last_move_pos:
+                dx = event.x() - self.last_move_pos.x()
+                dy = event.y() - self.last_move_pos.y()
+                
+                if dx != 0 or dy != 0:
+                    if hasattr(self, 'paintlayer') and hasattr(self.paintlayer, 'document'):
+                        self.paintlayer.document.translate_command(self.selected_command_index, dx, dy)
+                        
+                        # 🚀 性能优化：移动交互期间只更新显示，不重新渲染整个矢量文档
+                        # _refresh_paintlayer_from_vector() 会在 mouseReleaseEvent 中调用
+                        self.paintlayer.update()
+                        self.last_move_pos = event.pos()
+                        
+                        # 如果是钉图模式，也需要更新钉图窗口
+                        if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
+                            self.current_pinned_window.update()
+            return
+
         # 在钉图模式下，即使主窗口不可见也要处理绘画事件
         process_drawing = (hasattr(self, 'mode') and self.mode == "pinned" and 
                           hasattr(event, '_from_pinned_window')) or self.isVisible()
         
         if process_drawing:
-            # 处理选区移动/缩放
-            if getattr(self, 'selection_active', False) and self.left_button_push:
-                if self.selection_dragging:
-                    # 拖动移动
-                    new_x = event.x() - self.selection_press_offset.x()
-                    new_y = event.y() - self.selection_press_offset.y()
-                    self.selection_rect.moveTo(new_x, new_y)
-                    self._update_selection_preview()
-                    self.paintlayer.update()
-                    return
-                elif self.selection_resize_edge:
-                    # 基于按下时的矩形进行缩放
-                    pr = self.selection_press_rect
-                    dx = event.x() - self.selection_press_pos.x()
-                    dy = event.y() - self.selection_press_pos.y()
-                    left, top = pr.left(), pr.top()
-                    right, bottom = pr.right(), pr.bottom()
-                    edge = self.selection_resize_edge
-                    if 'l' in edge:
-                        left = pr.left() + dx
-                    if 'r' in edge:
-                        right = pr.right() + dx
-                    if 't' in edge:
-                        top = pr.top() + dy
-                    if 'b' in edge:
-                        bottom = pr.bottom() + dy
-                    # 规范化并限制最小尺寸
-                    x0 = min(left, right)
-                    x1 = max(left, right)
-                    y0 = min(top, bottom)
-                    y1 = max(top, bottom)
-                    if x1 - x0 < 1:
-                        x1 = x0 + 1
-                    if y1 - y0 < 1:
-                        y1 = y0 + 1
-                    self.selection_rect = QRect(x0, y0, x1 - x0, y1 - y0)
-                    self._update_selection_preview()
-                    self.paintlayer.update()
-                    return
             self.mouse_posx = event.x()  # 先储存起鼠标位置,用于画笔等的绘图计算
             self.mouse_posy = event.y()
             # 智能选区只在：1)finding_rect开启 2)智能光标开启 3)主窗口可见 4)没有按下鼠标(不在拖拽中)
@@ -4323,26 +4302,103 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             
             painter.drawText(int(text_x), int(text_y), text)
 
-        # 绘制圆形
+        # 绘制圆形（使用矩形边界框算法，与 jietuba_drawing.py 保持一致）
         if self.drawcircle_pointlist[2] == 1:
             pen = QPen(self.pencolor, self.tool_width, Qt.SolidLine)
             painter.setPen(pen)
-            radius = ((self.drawcircle_pointlist[1][0] - self.drawcircle_pointlist[0][0]) ** 2 +
-                     (self.drawcircle_pointlist[1][1] - self.drawcircle_pointlist[0][1]) ** 2) ** 0.5
-            painter.drawEllipse(self.drawcircle_pointlist[0][0] - radius, self.drawcircle_pointlist[0][1] - radius,
-                              radius * 2, radius * 2)
+            poitlist = self.drawcircle_pointlist
+            painter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
+                              abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
 
         # 恢复画笔状态
         painter.restore()
 
     # 绘制事件
+    def _draw_selection_handles(self, painter):
+        if not hasattr(self, 'selected_command_index') or self.selected_command_index is None:
+            return
+        if not hasattr(self, 'paintlayer') or not hasattr(self.paintlayer, 'document') or self.paintlayer.document is None:
+            return
+            
+        index = self.selected_command_index
+        if not (0 <= index < len(self.paintlayer.document.commands)):
+            return
+            
+        cmd = self.paintlayer.document.commands[index]
+        
+        # Get untransformed rect (AABB of points)
+        rect = self.paintlayer.document.get_command_rect_untransformed(index)
+        if not rect:
+            return
+            
+        w, h = self.paintlayer.width(), self.paintlayer.height()
+        center = self.paintlayer.document._get_command_center(cmd, w, h)
+        
+        # Prepare transform
+        transform = QTransform()
+        transform.translate(center.x(), center.y())
+        transform.rotate(cmd.rotation)
+        transform.scale(cmd.scale, cmd.scale)
+        transform.translate(-center.x(), -center.y())
+        
+        # Draw bounding box
+        painter.save()
+        painter.setTransform(transform, True)
+        # Use the same style as the creation preview (Red/Orange)
+        # The user mentioned "orange box", which likely refers to the red preview box (Qt.red)
+        # We will use Qt.red to match the existing style
+        pen = QPen(Qt.red, 1, Qt.DashLine) 
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(rect)
+        painter.restore()
+        
+        # Draw handles (in screen space)
+        corners = [
+            rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()
+        ]
+        transformed_corners = [transform.map(p) for p in corners]
+        
+        painter.setPen(QPen(Qt.red, 1))
+        painter.setBrush(Qt.white)
+        handle_size = 8
+        for p in transformed_corners:
+            painter.drawRect(int(p.x() - handle_size/2), int(p.y() - handle_size/2), handle_size, handle_size)
+            
+        # Draw rotation handle
+        top_center = (rect.topLeft() + rect.topRight()) / 2
+        rotation_handle_pos = top_center - QPointF(0, 20)
+        
+        p1 = transform.map(top_center)
+        p2 = transform.map(rotation_handle_pos)
+        
+        painter.setPen(QPen(Qt.red, 1))
+        painter.drawLine(p1, p2)
+        painter.setBrush(Qt.green)
+        painter.drawEllipse(p2, 4, 4)
+
     def paintEvent(self, event):  # 绘图函数,每次调用self.update时触发
         super().paintEvent(event)
         if self.on_init:
             print('oninit return')
             return
-        pixPainter = QPainter(self.pixmap())  # 画笔
-        pixPainter.end()
+        
+        # Draw creation preview (if any)
+        # This logic was missing in the main window paintEvent, causing confusion
+        # We reuse the logic from paint_on_pinned_window but apply it to the main window
+        painter = QPainter(self)
+        
+        # Only draw preview if NOT in interaction mode (to avoid double drawing during scale/rotate)
+        # OR if the tool is active but we are not selecting/modifying an existing object
+        is_interacting = hasattr(self, 'interaction_mode') and self.interaction_mode is not None
+        is_moving = hasattr(self, 'is_moving_object') and self.is_moving_object
+        
+        if not is_interacting and not is_moving:
+             self.paint_on_pinned_window(painter, None)
+
+        # Draw selection handles
+        self._draw_selection_handles(painter)
+        painter.end()
 
     def closeEvent(self, event):
         """Slabel窗口关闭事件，设置closed标记防止QPainter冲突"""
