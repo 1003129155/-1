@@ -563,10 +563,10 @@ class SettingsDialog(QDialog):
             warning_layout.addLayout(warning_header)
             
             warning_text = QLabel(
-                "これは無OCR版本です。OCR機能は含まれていません。\n\n"
+                "これは無OCRのカジュアルバージョン。\n\n"
                 "OCR機能が必要な場合は、フル版をダウンロードするか、\n"
-                "以下のコマンドでOCRモジュールをインストールしてください:\n"
-                "pip install rapidocr onnxruntime"
+                "開発者に問い合わせしてください。:\n"
+                "RI　JYAARU"
             )
             warning_text.setStyleSheet("font-size: 12px; color: #666; background-color: transparent;")
             warning_text.setWordWrap(True)
