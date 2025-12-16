@@ -583,6 +583,13 @@ class PaintLayer(QLabel):
         self._pending_vectors = []
         self._current_stroke_meta = None
 
+    @property
+    def document(self):
+        """获取关联的矢量文档"""
+        if self.parent and hasattr(self.parent, '_ensure_vector_document'):
+            return self.parent._ensure_vector_document()
+        return None
+
     def _vector_capture_color(self, effective_color: QColor, is_highlight: bool) -> QColor:
         """选择写入矢量命令的颜色。
 
@@ -1001,6 +1008,15 @@ class PaintLayer(QLabel):
                         )
                     print(f"矩形撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
+                    
+                    # 自动选中刚绘制的矩形
+                    if hasattr(self.parent, 'paintlayer') and hasattr(self.parent.paintlayer, 'document'):
+                        last_index = len(self.parent.paintlayer.document.commands) - 1
+                        if last_index >= 0:
+                            self.parent.selected_command_index = last_index
+                            print(f"🎯 [自动选中] 矩形绘制完成，自动选中对象 {last_index}")
+                            # 强制重绘以显示选中框
+                            self.update()
                 except Exception as e:
                     print(f"画矩形pixPainter错误: {e}")
 
@@ -1021,7 +1037,10 @@ class PaintLayer(QLabel):
                     self.pixPainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.SolidLine))
                     self.pixPainter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                                 abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
+                    
+                    # 🔧 在记录矢量命令之前先清空预览，避免闪烁
                     self.parent.drawcircle_pointlist = [[-2, -2], [-2, -2], 0]
+                    
                     if hasattr(self.parent, 'record_circle_command'):
                         self.parent.record_circle_command(
                             poitlist[0][:],
@@ -1031,6 +1050,15 @@ class PaintLayer(QLabel):
                         )
                     print(f"圆形撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
+                    
+                    # 自动选中刚绘制的圆形
+                    if hasattr(self.parent, 'paintlayer') and hasattr(self.parent.paintlayer, 'document'):
+                        last_index = len(self.parent.paintlayer.document.commands) - 1
+                        if last_index >= 0:
+                            self.parent.selected_command_index = last_index
+                            print(f"🎯 [自动选中] 圆形绘制完成，自动选中对象 {last_index}")
+                            # 强制重绘以显示选中框
+                            self.update()
                 except Exception as e:
                     print(f"画圆pixPainter错误: {e}")
 
@@ -1064,6 +1092,15 @@ class PaintLayer(QLabel):
                     self.parent.drawarrow_pointlist = [[-2, -2], [-2, -2], 0]
                     print(f"箭头撤销调试: paintEvent中绘制完成，创建备份")
                     self.parent.backup_shortshot()
+                    
+                    # 自动选中刚绘制的箭头
+                    if hasattr(self.parent, 'paintlayer') and hasattr(self.parent.paintlayer, 'document'):
+                        last_index = len(self.parent.paintlayer.document.commands) - 1
+                        if last_index >= 0:
+                            self.parent.selected_command_index = last_index
+                            print(f"🎯 [自动选中] 箭头绘制完成，自动选中对象 {last_index}")
+                            # 强制重绘以显示选中框
+                            self.update()
                 except Exception as e:
                     print(f"画箭头pixPainter错误: {e}")
 
@@ -1238,45 +1275,97 @@ class PaintLayer(QLabel):
 
     def _draw_selection_overlay(self):
         parent = self.parent
-        if (not parent or getattr(parent, 'closed', False) or
-                not getattr(parent, 'selection_active', False)):
+        if not parent or getattr(parent, 'closed', False):
             return
-        rect = getattr(parent, 'selection_rect', None)
-        if rect is None or rect.width() <= 0 or rect.height() <= 0:
-            return
-        pixmap = getattr(parent, 'selection_scaled_pixmap', None)
-        if pixmap is None:
-            pixmap = getattr(parent, 'selection_pixmap', None)
-        if pixmap is None or pixmap.isNull():
-            return
-        try:
-            overlay = QPainter(self)
-            overlay.setRenderHint(QPainter.Antialiasing)
-            overlay.drawPixmap(rect.topLeft(), pixmap)
-            pen = QPen(QColor(0, 120, 215), 1, Qt.DashLine)
-            overlay.setPen(pen)
-            overlay.setBrush(Qt.NoBrush)
-            overlay.drawRect(rect)
+            
+        # 1. 绘制截图选区边框（原逻辑）
+        if getattr(parent, 'selection_active', False):
+            rect = getattr(parent, 'selection_rect', None)
+            if rect and rect.width() > 0 and rect.height() > 0:
+                pixmap = getattr(parent, 'selection_scaled_pixmap', None)
+                if pixmap is None:
+                    pixmap = getattr(parent, 'selection_pixmap', None)
+                if pixmap and not pixmap.isNull():
+                    try:
+                        overlay = QPainter(self)
+                        overlay.setRenderHint(QPainter.Antialiasing)
+                        overlay.drawPixmap(rect.topLeft(), pixmap)
+                        pen = QPen(QColor(0, 120, 215), 1, Qt.DashLine)
+                        overlay.setPen(pen)
+                        overlay.setBrush(Qt.NoBrush)
+                        overlay.drawRect(rect)
 
-            handle_size = 6
-            cx = rect.x() + rect.width() // 2
-            cy = rect.y() + rect.height() // 2
-            handles = [
-                QRect(rect.left()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
-                QRect(cx-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
-                QRect(rect.right()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
-                QRect(rect.left()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
-                QRect(rect.right()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
-                QRect(rect.left()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
-                QRect(cx-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
-                QRect(rect.right()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
-            ]
-            overlay.setBrush(QBrush(QColor(0, 120, 215)))
-            for handle in handles:
-                overlay.drawRect(handle)
-            overlay.end()
-        except Exception as e:
-            print(f"selection overlay draw error: {e}")
+                        handle_size = 6
+                        cx = rect.x() + rect.width() // 2
+                        cy = rect.y() + rect.height() // 2
+                        handles = [
+                            QRect(rect.left()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                            QRect(cx-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                            QRect(rect.right()-handle_size//2, rect.top()-handle_size//2, handle_size, handle_size),
+                            QRect(rect.left()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
+                            QRect(rect.right()-handle_size//2, cy-handle_size//2, handle_size, handle_size),
+                            QRect(rect.left()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+                            QRect(cx-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+                            QRect(rect.right()-handle_size//2, rect.bottom()-handle_size//2, handle_size, handle_size),
+                        ]
+                        overlay.setBrush(QBrush(QColor(0, 120, 215)))
+                        for handle in handles:
+                            overlay.drawRect(handle)
+                        overlay.end()
+                    except Exception as e:
+                        print(f"selection overlay draw error: {e}")
+
+        # 2. 绘制选中对象的边框（新逻辑）
+        if hasattr(parent, 'selected_command_index') and parent.selected_command_index is not None:
+            try:
+                # 获取选中对象的包围盒
+                if hasattr(parent, 'paintlayer') and hasattr(parent.paintlayer, 'document'):
+                    doc = parent.paintlayer.document
+                    rect_norm = doc.get_command_rect(parent.selected_command_index)
+                    if rect_norm:
+                        # get_command_rect 返回的是基于 base_size 的坐标
+                        # 如果当前显示尺寸与 base_size 不同，需要缩放
+                        # 但通常 paintlayer 的大小就是 base_size (或者 document 内部处理了)
+                        # 实际上 get_command_rect 已经返回了像素坐标 (基于 base_size)
+                        # 我们只需要确保绘制坐标系正确
+                        
+                        painter = QPainter(self)
+                        painter.setRenderHint(QPainter.Antialiasing)
+                        
+                        # 绘制橙色虚线框
+                        pen = QPen(QColor(255, 165, 0), 2, Qt.DashLine)
+                        painter.setPen(pen)
+                        painter.setBrush(Qt.NoBrush)
+                        painter.drawRect(rect_norm)
+                        
+                        # 绘制手柄
+                        handle_size = 8
+                        rect = rect_norm
+                        cx = rect.x() + rect.width() / 2
+                        cy = rect.y() + rect.height() / 2
+                        
+                        # 8个手柄
+                        handles = [
+                            QRectF(rect.left()-handle_size/2, rect.top()-handle_size/2, handle_size, handle_size),
+                            QRectF(cx-handle_size/2, rect.top()-handle_size/2, handle_size, handle_size),
+                            QRectF(rect.right()-handle_size/2, rect.top()-handle_size/2, handle_size, handle_size),
+                            QRectF(rect.left()-handle_size/2, cy-handle_size/2, handle_size, handle_size),
+                            QRectF(rect.right()-handle_size/2, cy-handle_size/2, handle_size, handle_size),
+                            QRectF(rect.left()-handle_size/2, rect.bottom()-handle_size/2, handle_size, handle_size),
+                            QRectF(cx-handle_size/2, rect.bottom()-handle_size/2, handle_size, handle_size),
+                            QRectF(rect.right()-handle_size/2, rect.bottom()-handle_size/2, handle_size, handle_size),
+                        ]
+                        
+                        painter.setPen(QPen(QColor(255, 165, 0), 1, Qt.SolidLine))
+                        painter.setBrush(QBrush(QColor(255, 255, 255)))
+                        for handle in handles:
+                            painter.drawRect(handle)
+                            
+                        painter.end()
+            except Exception as e:
+                print(f"object selection overlay draw error: {e}")
+
+
 
     def clear(self):
         """清理PaintLayer的绘画数据和QPainter"""
