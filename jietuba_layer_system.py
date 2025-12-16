@@ -94,6 +94,15 @@ class VectorLayerDocument:
 	# ------------------------------------------------------------------
 	def clear(self) -> None:
 		self.commands.clear()
+	
+	def cleanup(self) -> None:
+		"""释放所有资源，防止内存泄漏"""
+		# 清空命令列表
+		self.commands.clear()
+		# 释放base_pixmap
+		if self._base_pixmap is not None:
+			self._base_pixmap = None
+		self._base_size = QSize(1, 1)
 
 	def add_stroke(
 		self,

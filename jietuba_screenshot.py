@@ -1616,7 +1616,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # painter.setRenderHint(QPainter.Antialiasing)
         painter.drawPixmap(0, 0, get_pix)
         painter.end()  # 一定要end
-        self.originalPix = pixmap.copy()
+        # 优化: 避免不必要的深拷贝，QPixmap是隐式共享的，且pixmap是局部变量
+        self.originalPix = pixmap
         self.vector_document = None
         self._ensure_vector_document()
         

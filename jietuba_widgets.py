@@ -714,7 +714,7 @@ class Freezer(QLabel):
         self.p_x = self.p_y = 0
         # self.setMaximumSize(QApplication.desktop().size())
         self.timer = QTimer(self)  # 创建一个定时器
-        self.timer.setInterval(200)  # 设置定时器的时间间隔为200ms
+        self.timer.setInterval(600)  # 设置定时器的时间间隔为600ms
         self.timer.timeout.connect(self.check_mouse_leave)  # 定时器超时时触发check_mouse_leave函数
         
         # 创建延迟隐藏工具栏的定时器
@@ -864,6 +864,21 @@ class Freezer(QLabel):
             
             def on_ocr_finished():
                 try:
+                    # 检查窗口是否已关闭
+                    if hasattr(self, '_is_closed') and self._is_closed:
+                        print(f"⚠️ [OCR] 窗口已关闭，跳过结果加载")
+                        return
+                    
+                    # 检查OCR文字层是否还存在
+                    if not hasattr(self, 'ocr_text_layer') or self.ocr_text_layer is None:
+                        print(f"⚠️ [OCR] OCR文字层已被清理，跳过结果加载")
+                        return
+                    
+                    # 检查线程是否还存在
+                    if not hasattr(self, 'ocr_thread') or self.ocr_thread is None:
+                        print(f"⚠️ [OCR] OCR线程已被清理，跳过结果加载")
+                        return
+                    
                     # 明确检查 result 是否为字典（避免 numpy 数组的真值判断问题）
                     if self.ocr_thread.result is not None and isinstance(self.ocr_thread.result, dict):
                         if self.ocr_thread.result.get('code') == 100:
@@ -880,7 +895,7 @@ class Freezer(QLabel):
                     traceback.print_exc()
                 finally:
                     # 清理线程
-                    if hasattr(self, 'ocr_thread'):
+                    if hasattr(self, 'ocr_thread') and self.ocr_thread:
                         self.ocr_thread.deleteLater()
                         self.ocr_thread = None
             
@@ -1803,42 +1818,33 @@ class Freezer(QLabel):
                     QApplication.processEvents()
 
             self.update()
-    def _clamp_position_to_virtual_desktop(self, x: int, y: int) -> Tuple[int, int]:
-        """将窗口位置限制在虚拟桌面范围内，防止移动到极端坐标。"""
-        screens = QApplication.screens()
-        if not screens:
-            return int(x), int(y)
-
-        margin = 200  # 允许适度超出屏幕边缘，避免看起来被“吸附”
-        left = min(screen.geometry().x() for screen in screens) - margin
-        top = min(screen.geometry().y() for screen in screens) - margin
-        right = max(screen.geometry().x() + screen.geometry().width() for screen in screens) + margin
-        bottom = max(screen.geometry().y() + screen.geometry().height() for screen in screens) + margin
-
-        max_x = right - self.width()
-        max_y = bottom - self.height()
-        if max_x < left:
-            max_x = left
-        if max_y < top:
-            max_y = top
-
-        clamped_x = max(left, min(int(x), max_x))
-        clamped_y = max(top, min(int(y), max_y))
-        if (clamped_x != int(x) or clamped_y != int(y)) and not getattr(self, '_suppress_move_debug', False):
-            print(f"⚠️ 钉图窗口位置越界: 请求=({x},{y}) -> 调整为=({clamped_x},{clamped_y})")
-        return clamped_x, clamped_y
     def move(self,x,y):
-        x, y = self._clamp_position_to_virtual_desktop(x, y)
+        # x, y = self._clamp_position_to_virtual_desktop(x, y)  # 移除屏幕区域限制，提升移动性能
         super().move(x,y)
         
         # 避免在DPI调整过程中的递归调用
         if getattr(self, '_adjusting_dpi', False):
             return
         
+        # 🚀 性能优化：如果正在鼠标拖动窗口，暂停所有重操作
+        # 1. 暂停 DPI 检查（避免跨屏时触发 resize/repaint）
+        # 2. 暂停工具栏更新（避免双窗口同步移动导致的卡顿）
+        # 这些操作将在 mouseReleaseEvent 中统一处理
+        if getattr(self, 'drag', False):
+            return
+        
         # 检测DPI变化并调整窗口大小
         self.check_and_adjust_for_dpi_change()
         
         # 如果有主窗口工具栏，更新其位置
+        # 性能优化：添加节流，避免每次微小移动都触发昂贵的工具栏重定位
+        now = time.time()
+        last_update = getattr(self, '_last_toolbar_update_time', 0)
+        if now - last_update < 0.013:
+            return
+            
+        self._last_toolbar_update_time = now
+        
         if self.main_window and hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
             # 检查是否有保存的显示器信息，如果没有则重新获取
             if not hasattr(self, 'target_screen'):
@@ -2203,6 +2209,13 @@ class Freezer(QLabel):
                     self._drag_offset = event.globalPos() - self.pos()
                 except Exception:
                     self._drag_offset = QPoint(self.p_x, self.p_y)
+                
+                # 移动开始时隐藏工具栏，提升视觉流畅度
+                if self.main_window:
+                    if hasattr(self.main_window, 'botton_box'):
+                        self.main_window.botton_box.hide()
+                    if hasattr(self.main_window, 'paint_tools_menu'):
+                        self.main_window.paint_tools_menu.hide()
             # self.resize(self.width()/2,self.height()/2)
             # self.setPixmap(self.pixmap().scaled(self.pixmap().width()/2,self.pixmap().height()/2))
 
@@ -2245,6 +2258,24 @@ class Freezer(QLabel):
             
         if event.button() == Qt.LeftButton:
             self.setCursor(Qt.ArrowCursor)
+            
+            # 拖动结束，强制更新一次工具栏位置（忽略节流）
+            if self.drag:
+                # 1. 检查 DPI 变化（处理跨屏拖动）
+                self.check_and_adjust_for_dpi_change()
+                
+                # 2. 更新工具栏位置并显示
+                if self.main_window:
+                    # 如果启用了自动显示工具栏，则重新显示并定位
+                    if self._is_auto_toolbar_enabled() and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
+                        self.main_window.show_toolbar_for_pinned_window(self)
+                    elif hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
+                        # 否则只更新位置（如果它是可见的）
+                        self.main_window.position_toolbar_for_pinned_window(self)
+                        
+                    # 重置节流计时器，确保下次移动能立即响应
+                    self._last_toolbar_update_time = 0
+                
             self.drag = self.resize_the_window = False
             self.resize_direction = None  # 重置调整方向
     def underMouse(self) -> bool:
@@ -2307,8 +2338,8 @@ class Freezer(QLabel):
                     self.move(new_pos.x(), new_pos.y())
                 else:
                     self.move(event.x() + self.x() - self.p_x, event.y() + self.y() - self.p_y)
-                # 拖拽移动时检查DPI变化
-                self.check_and_adjust_for_dpi_change()
+                # 拖拽移动时检查DPI变化 - 已在 move() 中处理，此处移除冗余调用
+                # self.check_and_adjust_for_dpi_change()
             elif self.resize_the_window:
                 # 处理八个方向的调整大小（所有方向都保持宽高比）
                 if not hasattr(self, 'resize_direction'):
@@ -2648,17 +2679,33 @@ class Freezer(QLabel):
         
         # 停止所有定时器
         if hasattr(self, 'timer') and self.timer:
-            self.timer.stop()
-            self.timer.deleteLater()
-            self.timer = None
-            print(f"🧹 [内存清理] 定时器已停止并删除")
+            try:
+                self.timer.stop()
+                # 断开信号连接
+                try:
+                    self.timer.timeout.disconnect()
+                except:
+                    pass
+                self.timer.deleteLater()
+                self.timer = None
+                print(f"🧹 [内存清理] 定时器已停止并删除")
+            except Exception as e:
+                print(f"⚠️ 清理定时器时出错: {e}")
         
         # 停止延迟隐藏定时器
         if hasattr(self, 'hide_timer') and self.hide_timer:
-            self.hide_timer.stop()
-            self.hide_timer.deleteLater()
-            self.hide_timer = None
-            print(f"🧹 [内存清理] 延迟隐藏定时器已停止并删除")
+            try:
+                self.hide_timer.stop()
+                # 断开信号连接
+                try:
+                    self.hide_timer.timeout.disconnect()
+                except:
+                    pass
+                self.hide_timer.deleteLater()
+                self.hide_timer = None
+                print(f"🧹 [内存清理] 延迟隐藏定时器已停止并删除")
+            except Exception as e:
+                print(f"⚠️ 清理延迟隐藏定时器时出错: {e}")
         
         # 清理图像数据 - 注意：不再使用 origin_imgpix 和 showing_imgpix，仅清理 OCR 相关图片
         if hasattr(self, 'ocr_res_imgpix') and self.ocr_res_imgpix:
@@ -2772,6 +2819,52 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理tips_shower时出错: {e}")
         
+        # 清理OCR线程（必须在OCR层之前清理）
+        if hasattr(self, 'ocr_thread') and self.ocr_thread:
+            try:
+                # 如果线程还在运行，尝试终止
+                if self.ocr_thread.isRunning():
+                    print(f"🧹 [内存清理] OCR线程还在运行，等待终止...")
+                    # 断开finished信号，防止回调触发
+                    try:
+                        self.ocr_thread.finished.disconnect()
+                    except:
+                        pass
+                    
+                    self.ocr_thread.quit()
+                    self.ocr_thread.wait(1000)  # 等待最多1秒
+                    if self.ocr_thread.isRunning():
+                        print(f"⚠️ [内存清理] OCR线程未能在1秒内停止，强制终止")
+                        self.ocr_thread.terminate()
+                        self.ocr_thread.wait(500)
+                else:
+                    # 线程已结束，断开信号连接
+                    try:
+                        self.ocr_thread.finished.disconnect()
+                    except:
+                        pass
+                
+                self.ocr_thread.deleteLater()
+                self.ocr_thread = None
+                print(f"✅ [内存清理] OCR线程已清理")
+            except Exception as e:
+                print(f"⚠️ 清理OCR线程时出错: {e}")
+        
+        # 清理OCR文字层（可能占用大量内存）
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            try:
+                # 调用OCR层的清理方法
+                if hasattr(self.ocr_text_layer, 'cleanup'):
+                    self.ocr_text_layer.cleanup()
+                
+                # 隐藏并删除
+                self.ocr_text_layer.hide()
+                self.ocr_text_layer.deleteLater()
+                self.ocr_text_layer = None
+                print(f"✅ [内存清理] OCR文字层已清理")
+            except Exception as e:
+                print(f"⚠️ 清理OCR文字层时出错: {e}")
+        
         # 清理paintlayer
         if hasattr(self, 'paintlayer') and self.paintlayer:
             try:
@@ -2789,6 +2882,23 @@ class Freezer(QLabel):
             except Exception as e:
                 print(f"⚠️ 清理paintlayer时出错: {e}")
         
+        # 清理layer_document（矢量图层系统，包含大图像）
+        if hasattr(self, 'layer_document') and self.layer_document:
+            try:
+                # 调用清理方法释放pixmap
+                if hasattr(self.layer_document, 'cleanup'):
+                    self.layer_document.cleanup()
+                else:
+                    # 备用清理
+                    self.layer_document.clear()
+                    if hasattr(self.layer_document, '_base_pixmap'):
+                        self.layer_document._base_pixmap = None
+                
+                self.layer_document = None
+                print(f"✅ [内存清理] layer_document已清理")
+            except Exception as e:
+                print(f"⚠️ 清理layer_document时出错: {e}")
+        
         # 清理备份历史（图像数据）
         if hasattr(self, 'backup_pic_list'):
             try:
@@ -2803,11 +2913,30 @@ class Freezer(QLabel):
         # 清理关闭按钮
         if hasattr(self, 'close_button') and self.close_button:
             try:
+                # 断开信号连接
+                try:
+                    self.close_button.clicked.disconnect()
+                except:
+                    pass
                 self.close_button.deleteLater()
                 self.close_button = None
                 print(f"🧹 [内存清理] close_button已清理")
             except Exception as e:
                 print(f"⚠️ 清理close_button时出错: {e}")
+        
+        # 清理工具栏切换按钮
+        if hasattr(self, 'toolbar_toggle_button') and self.toolbar_toggle_button:
+            try:
+                # 断开信号连接
+                try:
+                    self.toolbar_toggle_button.clicked.disconnect()
+                except:
+                    pass
+                self.toolbar_toggle_button.deleteLater()
+                self.toolbar_toggle_button = None
+                print(f"✅ [内存清理] toolbar_toggle_button已清理")
+            except Exception as e:
+                print(f"⚠️ 清理toolbar_toggle_button时出错: {e}")
         
         # 清理主窗口的文字输入框（如果被独立出来了）
         # 必须在清理子控件之前执行，否则如果text_box是子控件会被误删
@@ -2911,6 +3040,42 @@ class Freezer(QLabel):
         if hasattr(self, '_is_closed') and self._is_closed:
             super().closeEvent(e)
             return
+        
+        # 标记窗口正在关闭
+        self._is_closed = True
+        
+        # 🔥 关键修复：立即清理OCR线程，防止回调访问已删除的对象
+        if hasattr(self, 'ocr_thread') and self.ocr_thread:
+            try:
+                print(f"🧹 [关闭事件] 立即清理OCR线程...")
+                # 断开finished信号，防止回调触发
+                try:
+                    self.ocr_thread.finished.disconnect()
+                except:
+                    pass
+                
+                if self.ocr_thread.isRunning():
+                    self.ocr_thread.quit()
+                    self.ocr_thread.wait(500)
+                    if self.ocr_thread.isRunning():
+                        self.ocr_thread.terminate()
+                        self.ocr_thread.wait(200)
+                
+                self.ocr_thread.deleteLater()
+                self.ocr_thread = None
+            except Exception as ex:
+                print(f"⚠️ 清理OCR线程时出错: {ex}")
+        
+        # 🔥 关键修复：立即清理OCR层，防止内存泄漏
+        if hasattr(self, 'ocr_text_layer') and self.ocr_text_layer:
+            try:
+                print(f"🧹 [关闭事件] 立即清理OCR文字层...")
+                if hasattr(self.ocr_text_layer, 'cleanup'):
+                    self.ocr_text_layer.cleanup()
+                self.ocr_text_layer.deleteLater()
+                self.ocr_text_layer = None
+            except Exception as ex:
+                print(f"⚠️ 清理OCR文字层时出错: {ex}")
         
         # 立即从主窗口的列表中移除自己
         main_window_ref = self.main_window  # 保存引用

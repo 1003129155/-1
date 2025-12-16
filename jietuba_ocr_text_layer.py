@@ -703,4 +703,62 @@ class OCRTextLayer(QWidget):
             return
         else:
             super().keyPressEvent(event)
+    
+    def cleanup(self):
+        """清理OCR文字层的所有资源，防止内存泄漏"""
+        try:
+            print("🧹 [OCR文字层] 开始清理资源...")
+            
+            # 清除选择状态
+            self.clear_selection()
+            
+            # 清空文字块列表（释放OCR数据）
+            if hasattr(self, 'text_items') and self.text_items:
+                for item in self.text_items:
+                    # 清空每个item的数据
+                    item.text = None
+                    item.original_box = None
+                    item.char_positions.clear()
+                self.text_items.clear()
+                print(f"✅ [OCR文字层] 已清空 text_items")
+            
+            # 移除事件过滤器
+            if hasattr(self, '_event_filter_target') and self._event_filter_target:
+                try:
+                    self._event_filter_target.removeEventFilter(self)
+                    print(f"✅ [OCR文字层] 已移除事件过滤器")
+                except Exception as e:
+                    print(f"⚠️ [OCR文字层] 移除事件过滤器失败: {e}")
+                finally:
+                    self._event_filter_target = None
+            
+            # 断开回调函数引用
+            self.is_drawing_callback = None
+            
+            # 隐藏并断开父窗口连接
+            self.hide()
+            self.setParent(None)
+            
+            # 禁用状态
+            self.enabled = False
+            self.drawing_mode = True
+            
+            print("✅ [OCR文字层] 资源清理完成")
+            
+        except Exception as e:
+            print(f"⚠️ [OCR文字层] 清理过程中出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def __del__(self):
+        """析构函数，确保资源被释放"""
+        try:
+            # 在对象销毁时自动清理
+            if hasattr(self, '_event_filter_target') and self._event_filter_target:
+                try:
+                    self._event_filter_target.removeEventFilter(self)
+                except:
+                    pass
+        except:
+            pass
 

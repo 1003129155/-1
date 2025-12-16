@@ -113,6 +113,7 @@ class SettingsDialog(QDialog):
         self.current_hotkey = current_hotkey
         self.main_window = parent
         
+    
         self.setWindowTitle("設定")
         self.resize(850, 600)
         self.setFont(QFont("Microsoft YaHei", 9)) # 使用微软雅黑
@@ -1000,6 +1001,7 @@ class SettingsDialog(QDialog):
     def update_hotkey(self, new_hotkey):
         """更新对话框中显示的快捷键"""
         self.hotkey_input.setText(new_hotkey)
+
 
 # ==========================================
 # 3. 用于测试的 Mock 类 (当你集成时请删除这部分)
