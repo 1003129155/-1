@@ -18,7 +18,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PyQt5.QtCore import QPointF, QSize, Qt, QRectF
 from PyQt5.QtGui import (QColor, QFont, QPainter, QPen,
-					 QPixmap)
+					 QPixmap, QTransform)
 
 
 ColorTuple = Tuple[int, int, int, int]
@@ -50,6 +50,8 @@ class VectorPaintCommand:
 	color: ColorTuple
 	blend: str = "normal"  # normal / multiply
 	extra: Dict[str, float] = field(default_factory=dict)
+	rotation: float = 0.0
+	scale: float = 1.0
 
 	def clone(self) -> "VectorPaintCommand":
 		return VectorPaintCommand(
@@ -59,6 +61,8 @@ class VectorPaintCommand:
 			color=tuple(self.color),
 			blend=self.blend,
 			extra=dict(self.extra or {}),
+			rotation=self.rotation,
+			scale=self.scale,
 		)
 
 
@@ -227,6 +231,235 @@ class VectorLayerDocument:
 		)
 
 	# ------------------------------------------------------------------
+	# 交互支持 (命中测试与变换)
+	# ------------------------------------------------------------------
+	def hit_test(self, pos: QPointF, tolerance: float = 10.0) -> int:
+		"""检测指定位置命中了哪个命令，返回索引，未命中返回 -1。
+		优先返回最后绘制的对象（最上层）。
+		"""
+		w, h = self._base_size.width(), self._base_size.height()
+		if w <= 0 or h <= 0:
+			return -1
+			
+		# 倒序遍历（从最上层开始）
+		for i in range(len(self.commands) - 1, -1, -1):
+			cmd = self.commands[i]
+			
+			# Transform pos to local coordinates
+			local_pos = QPointF(pos)
+			if cmd.rotation != 0 or cmd.scale != 1.0:
+				center = self._get_command_center(cmd, w, h)
+				transform = QTransform()
+				transform.translate(center.x(), center.y())
+				transform.rotate(cmd.rotation)
+				transform.scale(cmd.scale, cmd.scale)
+				transform.translate(-center.x(), -center.y())
+				
+				inverted, ok = transform.inverted()
+				if ok:
+					local_pos = inverted.map(pos)
+
+			if self._is_hit_screen(cmd, local_pos.x(), local_pos.y(), tolerance, w, h):
+				return i
+		return -1
+
+	def _is_hit_screen(self, cmd: VectorPaintCommand, x: float, y: float, tol: float, w: int, h: int) -> bool:
+		if not cmd.points:
+			return False
+			
+		# 将点转换为屏幕坐标
+		screen_points = [(p[0] * w, p[1] * h) for p in cmd.points]
+		
+		if cmd.kind == "stroke":
+			# 检查线段距离
+			if len(screen_points) > 1:
+				for i in range(len(screen_points) - 1):
+					p1 = screen_points[i]
+					p2 = screen_points[i+1]
+					dist = self._dist_point_segment(x, y, p1, p2)
+					if dist <= tol:
+						return True
+			# 如果只有一个点，检查点距离
+			elif len(screen_points) == 1:
+				p = screen_points[0]
+				if ((p[0] - x)**2 + (p[1] - y)**2)**0.5 <= tol:
+					return True
+			return False
+			
+		elif cmd.kind in ("rect", "circle", "arrow"):
+			if len(screen_points) < 2:
+				return False
+			p1, p2 = screen_points[0], screen_points[1]
+			
+			# 简单包围盒检测
+			min_x = min(p1[0], p2[0]) - tol
+			max_x = max(p1[0], p2[0]) + tol
+			min_y = min(p1[1], p2[1]) - tol
+			max_y = max(p1[1], p2[1]) + tol
+			
+			if min_x <= x <= max_x and min_y <= y <= max_y:
+				return True
+			return False
+			
+		elif cmd.kind == "text":
+			p = screen_points[0]
+			# 估算文本区域 (假设文本向右下方延伸)
+			# 更好的做法是保存文本的宽高比，这里做个宽泛的估算
+			font_size = self._pen_width(cmd, w, h)
+			# 假设文本大概宽10个字，高1行
+			if p[0] <= x <= p[0] + font_size * 10 and p[1] <= y <= p[1] + font_size * 2:
+				return True
+			# 检查锚点附近
+			if ((p[0] - x)**2 + (p[1] - y)**2)**0.5 <= tol:
+				return True
+			return False
+			
+		elif cmd.kind == "number":
+			p = screen_points[0]
+			radius = self._pen_width(cmd, w, h)
+			# 检查是否在圆内
+			if ((p[0] - x)**2 + (p[1] - y)**2)**0.5 <= max(radius, tol):
+				return True
+				
+		return False
+
+	def _dist_point_segment(self, px, py, p1, p2):
+		x1, y1 = p1
+		x2, y2 = p2
+		dx = x2 - x1
+		dy = y2 - y1
+		if dx == 0 and dy == 0:
+			return ((px - x1)**2 + (py - y1)**2)**0.5
+			
+		t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+		t = max(0, min(1, t))
+		
+		closest_x = x1 + t * dx
+		closest_y = y1 + t * dy
+		return ((px - closest_x)**2 + (py - closest_y)**2)**0.5
+
+	def translate_command(self, index: int, dx: float, dy: float) -> None:
+		"""移动指定索引的命令。dx, dy 为屏幕像素单位。"""
+		if not (0 <= index < len(self.commands)):
+			return
+			
+		w, h = self._base_size.width(), self._base_size.height()
+		if w <= 0 or h <= 0:
+			return
+			
+		norm_dx = dx / w
+		norm_dy = dy / h
+		
+		cmd = self.commands[index]
+		new_points = []
+		for pt in cmd.points:
+			new_points.append((pt[0] + norm_dx, pt[1] + norm_dy))
+		cmd.points = new_points
+		
+	def get_command_rect(self, index: int) -> Optional[QRectF]:
+		"""获取命令的包围盒（屏幕坐标），考虑旋转和缩放变换。"""
+		if not (0 <= index < len(self.commands)):
+			return None
+			
+		cmd = self.commands[index]
+		if not cmd.points:
+			return None
+			
+		w, h = self._base_size.width(), self._base_size.height()
+		
+		# 特殊处理序号
+		if cmd.kind == "number":
+			p = cmd.points[0]
+			radius = self._pen_width(cmd, w, h)
+			base_rect = QRectF(p[0]*w - radius, p[1]*h - radius, radius*2, radius*2)
+		else:
+			min_x = min(p[0] for p in cmd.points)
+			max_x = max(p[0] for p in cmd.points)
+			min_y = min(p[1] for p in cmd.points)
+			max_y = max(p[1] for p in cmd.points)
+			
+			# 对于文本，需要额外扩展
+			if cmd.kind == "text":
+				max_x += 0.2 # 估算
+				max_y += 0.1
+				
+			# 计算基础包围盒
+			base_rect = QRectF(min_x * w, min_y * h, (max_x - min_x) * w, (max_y - min_y) * h)
+			
+			# 扩展笔触宽度
+			stroke_width = self._pen_width(cmd, w, h)
+			margin = stroke_width / 2.0 + 4
+			base_rect = base_rect.adjusted(-margin, -margin, margin, margin)
+		
+		# 如果有旋转或缩放变换，需要应用变换后重新计算包围盒
+		if cmd.rotation != 0 or cmd.scale != 1.0:
+			# 获取对象中心点
+			center = self._get_command_center(cmd, w, h)
+			
+			# 创建变换矩阵
+			transform = QTransform()
+			transform.translate(center.x(), center.y())
+			transform.rotate(cmd.rotation)
+			transform.scale(cmd.scale, cmd.scale)
+			transform.translate(-center.x(), -center.y())
+			
+			# 应用变换到包围盒的四个角点
+			top_left = transform.map(base_rect.topLeft())
+			top_right = transform.map(base_rect.topRight())
+			bottom_left = transform.map(base_rect.bottomLeft())
+			bottom_right = transform.map(base_rect.bottomRight())
+			
+			# 计算变换后的包围盒
+			all_x = [top_left.x(), top_right.x(), bottom_left.x(), bottom_right.x()]
+			all_y = [top_left.y(), top_right.y(), bottom_left.y(), bottom_right.y()]
+			
+			new_min_x = min(all_x)
+			new_max_x = max(all_x)
+			new_min_y = min(all_y)
+			new_max_y = max(all_y)
+			
+			return QRectF(new_min_x, new_min_y, new_max_x - new_min_x, new_max_y - new_min_y)
+		
+		return base_rect
+
+	def get_command_rect_untransformed(self, index: int) -> Optional[QRectF]:
+		"""获取命令的原始包围盒（屏幕坐标），不考虑旋转和缩放变换。
+		用于需要手动应用变换的场景。"""
+		if not (0 <= index < len(self.commands)):
+			return None
+			
+		cmd = self.commands[index]
+		if not cmd.points:
+			return None
+			
+		w, h = self._base_size.width(), self._base_size.height()
+		
+		# 特殊处理序号
+		if cmd.kind == "number":
+			p = cmd.points[0]
+			radius = self._pen_width(cmd, w, h)
+			return QRectF(p[0]*w - radius, p[1]*h - radius, radius*2, radius*2)
+		
+		min_x = min(p[0] for p in cmd.points)
+		max_x = max(p[0] for p in cmd.points)
+		min_y = min(p[1] for p in cmd.points)
+		max_y = max(p[1] for p in cmd.points)
+		
+		# 对于文本，需要额外扩展
+		if cmd.kind == "text":
+			max_x += 0.2 # 估算
+			max_y += 0.1
+			
+		# 计算基础包围盒
+		base_rect = QRectF(min_x * w, min_y * h, (max_x - min_x) * w, (max_y - min_y) * h)
+		
+		# 扩展笔触宽度
+		stroke_width = self._pen_width(cmd, w, h)
+		margin = stroke_width / 2.0 + 4
+		
+		return base_rect.adjusted(-margin, -margin, margin, margin)
+
+	# ------------------------------------------------------------------
 	# 状态导入导出（给撤销/重做系统使用）
 	# ------------------------------------------------------------------
 	def export_state(self) -> List[Dict]:
@@ -240,6 +473,8 @@ class VectorLayerDocument:
 					"color": tuple(cmd.color),
 					"blend": cmd.blend,
 					"extra": dict(cmd.extra or {}),
+					"rotation": cmd.rotation,
+					"scale": cmd.scale,
 				}
 			)
 		return exported
@@ -255,6 +490,8 @@ class VectorLayerDocument:
 					color=tuple(raw.get("color", (255, 0, 0, 255))),
 					blend=raw.get("blend", "normal"),
 					extra=dict(raw.get("extra", {})),
+					rotation=float(raw.get("rotation", 0.0)),
+					scale=float(raw.get("scale", 1.0)),
 				)
 			)
 
@@ -331,121 +568,139 @@ class VectorLayerDocument:
 	def _pen_width(self, cmd: VectorPaintCommand, width: int, height: int) -> float:
 		return max(1.0, cmd.width_ratio * min(width, height))
 
+	def _get_command_center(self, cmd: VectorPaintCommand, width: int, height: int) -> QPointF:
+		if not cmd.points:
+			return QPointF(0, 0)
+		
+		min_x = min(p[0] for p in cmd.points)
+		max_x = max(p[0] for p in cmd.points)
+		min_y = min(p[1] for p in cmd.points)
+		max_y = max(p[1] for p in cmd.points)
+		
+		# Center in screen coordinates
+		center_x = (min_x + max_x) / 2.0 * width
+		center_y = (min_y + max_y) / 2.0 * height
+		return QPointF(center_x, center_y)
+
 	def _render_command(
 		self, painter: QPainter, cmd: VectorPaintCommand, width: int, height: int
 	) -> None:
 		if not cmd.points:
 			return
-		color = _color_from_tuple(cmd.color)
+		
+		painter.save()
+		try:
+			# Apply transformation
+			if cmd.rotation != 0 or cmd.scale != 1.0:
+				center = self._get_command_center(cmd, width, height)
+				painter.translate(center)
+				painter.rotate(cmd.rotation)
+				painter.scale(cmd.scale, cmd.scale)
+				painter.translate(-center)
 
-		if cmd.kind == "stroke":
-			scaled_points = [self._scaled_point(pt, width, height) for pt in cmd.points]
-			stroke_width = self._pen_width(cmd, width, height)
-			StrokeStampRenderer.render(
-				painter,
-				scaled_points,
-				stroke_width,
-				QColor(color),
-				cmd.extra.get("brush"),
-				cmd.extra.get("raw_alpha"),
-			)
-			return
+			color = _color_from_tuple(cmd.color)
 
-		if cmd.kind in {"rect", "circle"}:
-			start = self._scaled_point(cmd.points[0], width, height)
-			end = self._scaled_point(cmd.points[1], width, height)
-			left = min(start.x(), end.x())
-			top = min(start.y(), end.y())
-			w = abs(start.x() - end.x())
-			h = abs(start.y() - end.y())
-			pen = QPen(color)
-			pen.setWidthF(self._pen_width(cmd, width, height))
-			painter.setPen(pen)
-			painter.setBrush(Qt.NoBrush)
-			if cmd.kind == "rect":
-				painter.drawRect(left, top, w, h)
-			else:
-				painter.drawEllipse(left, top, w, h)
-			return
-
-		if cmd.kind == "arrow":
-			start = self._scaled_point(cmd.points[0], width, height)
-			end = self._scaled_point(cmd.points[1], width, height)
-			from jietuba_drawing import PaintLayer  # 延迟导入避免循环
-
-			temp_layer = PaintLayer.__new__(PaintLayer)
-			try:
-				temp_layer._draw_optimized_arrow(
+			if cmd.kind == "stroke":
+				scaled_points = [self._scaled_point(pt, width, height) for pt in cmd.points]
+				stroke_width = self._pen_width(cmd, width, height)
+				StrokeStampRenderer.render(
 					painter,
-					[[start.x(), start.y()], [end.x(), end.y()]],
-					color,
-					self._pen_width(cmd, width, height),
+					scaled_points,
+					stroke_width,
+					QColor(color),
+					cmd.extra.get("brush"),
+					cmd.extra.get("raw_alpha"),
 				)
-			except Exception:
-				pass
-			return
+			elif cmd.kind in {"rect", "circle"}:
+				start = self._scaled_point(cmd.points[0], width, height)
+				end = self._scaled_point(cmd.points[1], width, height)
+				left = min(start.x(), end.x())
+				top = min(start.y(), end.y())
+				w = abs(start.x() - end.x())
+				h = abs(start.y() - end.y())
+				pen = QPen(color)
+				pen.setWidthF(self._pen_width(cmd, width, height))
+				painter.setPen(pen)
+				painter.setBrush(Qt.NoBrush)
+				if cmd.kind == "rect":
+					painter.drawRect(left, top, w, h)
+				else:
+					painter.drawEllipse(left, top, w, h)
+			elif cmd.kind == "arrow":
+				start = self._scaled_point(cmd.points[0], width, height)
+				end = self._scaled_point(cmd.points[1], width, height)
+				from jietuba_drawing import PaintLayer  # 延迟导入避免循环
 
-		if cmd.kind == "text":
-			anchor = self._scaled_point(cmd.points[0], width, height)
-			font = QFont()
-			family = cmd.extra.get("font")
-			if family:
-				font.setFamily(family)
-			font.setPointSizeF(self._pen_width(cmd, width, height))
-			if "weight" in cmd.extra:
+				temp_layer = PaintLayer.__new__(PaintLayer)
 				try:
-					font.setWeight(int(cmd.extra.get("weight", 50)))
+					temp_layer._draw_optimized_arrow(
+						painter,
+						[[start.x(), start.y()], [end.x(), end.y()]],
+						color,
+						self._pen_width(cmd, width, height),
+					)
 				except Exception:
 					pass
-			if cmd.extra.get("italic"):
-				font.setItalic(True)
-			painter.setFont(font)
-			painter.setPen(QPen(color))
-			text = cmd.extra.get("text", "")
-			line_ratio = float(cmd.extra.get("line", 1.8))
-			lines = text.split("\n")
-			metrics = painter.fontMetrics()
-			line_height = metrics.height() * line_ratio
-			for i, line in enumerate(lines):
-				painter.drawText(anchor.x(), anchor.y() + i * line_height, line)
-			return
-
-		if cmd.kind == "number":
-			# 渲染序号标注（圆形背景+数字）
-			center = self._scaled_point(cmd.points[0], width, height)
-			number = int(cmd.extra.get("number", 1))
-			
-			# 获取背景颜色
-			bg_color = QColor(
-				int(cmd.extra.get("bg_r", 255)),
-				int(cmd.extra.get("bg_g", 0)),
-				int(cmd.extra.get("bg_b", 0)),
-				int(cmd.extra.get("bg_a", 200))
-			)
-			
-			# 计算圆形大小（根据 size_ratio）
-			circle_radius = self._pen_width(cmd, width, height)
-			
-			# 绘制圆形背景
-			painter.setPen(Qt.NoPen)
-			painter.setBrush(bg_color)
-			painter.drawEllipse(center, circle_radius, circle_radius)
-			
-			# 绘制数字
-			font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
-			painter.setFont(font)
-			painter.setPen(QPen(color))
-			
-			# 计算文字居中位置
-			metrics = painter.fontMetrics()
-			text = str(number)
-			text_width = metrics.horizontalAdvance(text)
-			text_height = metrics.height()
-			text_x = center.x() - text_width / 2
-			text_y = center.y() + text_height / 3  # 微调垂直居中
-			
-			painter.drawText(int(text_x), int(text_y), text)
-			return
+			elif cmd.kind == "text":
+				anchor = self._scaled_point(cmd.points[0], width, height)
+				font = QFont()
+				family = cmd.extra.get("font")
+				if family:
+					font.setFamily(family)
+				font.setPointSizeF(self._pen_width(cmd, width, height))
+				if "weight" in cmd.extra:
+					try:
+						font.setWeight(int(cmd.extra.get("weight", 50)))
+					except Exception:
+						pass
+				if cmd.extra.get("italic"):
+					font.setItalic(True)
+				painter.setFont(font)
+				painter.setPen(QPen(color))
+				text = cmd.extra.get("text", "")
+				line_ratio = float(cmd.extra.get("line", 1.8))
+				lines = text.split("\n")
+				metrics = painter.fontMetrics()
+				line_height = metrics.height() * line_ratio
+				for i, line in enumerate(lines):
+					painter.drawText(anchor.x(), anchor.y() + i * line_height, line)
+			elif cmd.kind == "number":
+				# 渲染序号标注（圆形背景+数字）
+				center = self._scaled_point(cmd.points[0], width, height)
+				number = int(cmd.extra.get("number", 1))
+				
+				# 获取背景颜色
+				bg_color = QColor(
+					int(cmd.extra.get("bg_r", 255)),
+					int(cmd.extra.get("bg_g", 0)),
+					int(cmd.extra.get("bg_b", 0)),
+					int(cmd.extra.get("bg_a", 200))
+				)
+				
+				# 计算圆形大小（根据 size_ratio）
+				circle_radius = self._pen_width(cmd, width, height)
+				
+				# 绘制圆形背景
+				painter.setPen(Qt.NoPen)
+				painter.setBrush(bg_color)
+				painter.drawEllipse(center, circle_radius, circle_radius)
+				
+				# 绘制数字
+				font = QFont("Arial", int(circle_radius * 0.8), QFont.Bold)
+				painter.setFont(font)
+				painter.setPen(QPen(color))
+				
+				# 计算文字居中位置
+				metrics = painter.fontMetrics()
+				text = str(number)
+				text_width = metrics.horizontalAdvance(text)
+				text_height = metrics.height()
+				text_x = center.x() - text_width / 2
+				text_y = center.y() + text_height / 3  # 微调垂直居中
+				
+				painter.drawText(int(text_x), int(text_y), text)
+		finally:
+			painter.restore()
 
 class StrokeStampRenderer:
 	"""统一的笔迹重放器，保证画笔与荧光笔渲染一致"""
