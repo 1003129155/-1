@@ -2737,7 +2737,7 @@ class Freezer(QLabel):
                 except Exception:
                     pass
             except Exception as e:
-                print(f"⚠️ 清理OCR线程时出错: {e}")
+                print(f"⚠️ 清理旧版OCR线程时出错: {e}")
             finally:
                 self.ocrthread = None
 
