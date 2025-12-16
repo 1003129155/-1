@@ -486,8 +486,8 @@ class ConfigManager:
         self.settings.setValue('pinned/auto_toolbar', bool(enabled))
     
     def get_ocr_enabled(self):
-        """获取 OCR 功能开关状态（默认关闭）"""
-        return self.settings.value('ocr/enabled', False, type=bool)
+        """获取 OCR 功能开关状态（默认开启）"""
+        return self.settings.value('ocr/enabled', True, type=bool)
     
     def set_ocr_enabled(self, enabled: bool):
         """设置 OCR 功能开关状态"""
@@ -1000,7 +1000,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.14 | 更新日: 2025.12/14")
+        self.version_label = QLabel("バージョン: 1.15 | 更新日: 2025.12/16")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)
