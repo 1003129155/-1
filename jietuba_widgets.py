@@ -2210,8 +2210,12 @@ class Freezer(QLabel):
                 except Exception:
                     self._drag_offset = QPoint(self.p_x, self.p_y)
                 
-                # 移动开始时隐藏工具栏，提升视觉流畅度
+                # 记住拖动前工具栏的可见状态
+                self._toolbar_visible_before_drag = False
                 if self.main_window:
+                    if hasattr(self.main_window, 'botton_box') and self.main_window.botton_box.isVisible():
+                        self._toolbar_visible_before_drag = True
+                    # 移动开始时隐藏工具栏，提升视觉流畅度
                     if hasattr(self.main_window, 'botton_box'):
                         self.main_window.botton_box.hide()
                     if hasattr(self.main_window, 'paint_tools_menu'):
@@ -2264,10 +2268,15 @@ class Freezer(QLabel):
                 # 1. 检查 DPI 变化（处理跨屏拖动）
                 self.check_and_adjust_for_dpi_change()
                 
-                # 2. 更新工具栏位置并显示
+                # 2. 恢复工具栏状态
                 if self.main_window:
-                    # 如果启用了自动显示工具栏，则重新显示并定位
-                    if self._is_auto_toolbar_enabled() and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
+                    # 如果拖动前工具栏是可见的，或者启用了自动显示，则重新显示并定位
+                    should_show_toolbar = (
+                        getattr(self, '_toolbar_visible_before_drag', False) or 
+                        self._is_auto_toolbar_enabled()
+                    )
+                    
+                    if should_show_toolbar and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
                         self.main_window.show_toolbar_for_pinned_window(self)
                     elif hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
                         # 否则只更新位置（如果它是可见的）
@@ -2275,6 +2284,10 @@ class Freezer(QLabel):
                         
                     # 重置节流计时器，确保下次移动能立即响应
                     self._last_toolbar_update_time = 0
+                
+                # 清理拖动前的状态标志
+                if hasattr(self, '_toolbar_visible_before_drag'):
+                    delattr(self, '_toolbar_visible_before_drag')
                 
             self.drag = self.resize_the_window = False
             self.resize_direction = None  # 重置调整方向
@@ -2822,31 +2835,39 @@ class Freezer(QLabel):
         # 清理OCR线程（必须在OCR层之前清理）
         if hasattr(self, 'ocr_thread') and self.ocr_thread:
             try:
-                # 如果线程还在运行，尝试终止
+                # 清理线程内部的数据（防止内存泄漏）
+                try:
+                    if hasattr(self.ocr_thread, 'pixmap'):
+                        self.ocr_thread.pixmap = None
+                    if hasattr(self.ocr_thread, 'result'):
+                        self.ocr_thread.result = None
+                except Exception:
+                    pass
+                
+                # 如果线程还在运行，断开信号但保留线程对象
                 if self.ocr_thread.isRunning():
-                    print(f"🧹 [内存清理] OCR线程还在运行，等待终止...")
+                    print(f"⏳ [内存清理] OCR线程仍在运行，已断开信号连接，线程会在后台完成（不影响使用）")
                     # 断开finished信号，防止回调触发
                     try:
                         self.ocr_thread.finished.disconnect()
-                    except:
+                    except Exception:
                         pass
-                    
-                    self.ocr_thread.quit()
-                    self.ocr_thread.wait(1000)  # 等待最多1秒
-                    if self.ocr_thread.isRunning():
-                        print(f"⚠️ [内存清理] OCR线程未能在1秒内停止，强制终止")
-                        self.ocr_thread.terminate()
-                        self.ocr_thread.wait(500)
+                    # ⚠️ 不要deleteLater()！线程还在运行，会报警告
+                    # 让线程对象保留在内存中，线程完成后会自动清理
+                    # 数据已清理，不会泄漏内存
+                    self.ocr_thread = None  # 断开引用，但对象会在后台继续存在
+                    print(f"✅ [内存清理] OCR线程已断开引用（线程在后台完成）")
                 else:
+                    print(f"✅ [内存清理] OCR线程已完成")
                     # 线程已结束，断开信号连接
                     try:
                         self.ocr_thread.finished.disconnect()
-                    except:
+                    except Exception:
                         pass
-                
-                self.ocr_thread.deleteLater()
-                self.ocr_thread = None
-                print(f"✅ [内存清理] OCR线程已清理")
+                    # 线程已完成，可以安全删除
+                    self.ocr_thread.deleteLater()
+                    self.ocr_thread = None
+                    print(f"✅ [内存清理] OCR线程对象已删除")
             except Exception as e:
                 print(f"⚠️ 清理OCR线程时出错: {e}")
         
