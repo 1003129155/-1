@@ -315,6 +315,19 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 print(f"⚠️ [矢量捕获] 初始化失败: {e}")
         return self.vector_document
 
+    def _ensure_paintlayer_initialized(self):
+        """确保paintlayer的pixmap已初始化（延迟创建优化）"""
+        if not getattr(self, '_paintlayer_initialized', False):
+            if hasattr(self, '_paintlayer_size') and hasattr(self, 'paintlayer'):
+                w, h = self._paintlayer_size
+                print(f"🎨 延迟初始化paintlayer: {w}x{h}")
+                pixmap = QPixmap(w, h)
+                pixmap.fill(Qt.transparent)
+                self.paintlayer.setPixmap(pixmap)
+                self._paintlayer_initialized = True
+                return True
+        return getattr(self, '_paintlayer_initialized', False)
+
     def _vector_base_size(self):
         if getattr(self, 'vector_document', None):
             size = self.vector_document.base_size
@@ -540,137 +553,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 }
             )
         return filtered
-
-    def _build_highlighter_icon(self, icon_size: QSize = QSize(24, 24)) -> QIcon:
-        """Create a simple highlighter icon using vector painting."""
-        ratio = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
-        width = float(icon_size.width()) * ratio
-        height = float(icon_size.height()) * ratio
-        pixmap = QPixmap(int(max(1, round(width))), int(max(1, round(height))))
-        pixmap.setDevicePixelRatio(ratio)
-        pixmap.fill(Qt.transparent)
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-
-        painter.save()
-        painter.translate(width * 0.55, height * 0.55)
-        painter.rotate(-32)
-
-        body_width = width * 0.62
-        body_height = height * 0.28
-        body_rect = QRectF(-body_width / 2.0, -body_height / 2.0, body_width, body_height)
-
-        outline_pen = QPen(QColor(70, 70, 70))
-        outline_pen.setWidthF(max(1.0, width * 0.035))
-        painter.setPen(outline_pen)
-        painter.setBrush(QColor(255, 236, 132))
-        painter.drawRoundedRect(body_rect, body_height * 0.45, body_height * 0.45)
-
-        nib_width = body_height * 0.95
-        nib_rect = QRectF(body_rect.right() - nib_width, body_rect.top() - body_height * 0.1,
-                          nib_width, body_height * 1.2)
-        painter.setBrush(QColor(255, 210, 85))
-        painter.drawRoundedRect(nib_rect, body_height * 0.4, body_height * 0.4)
-
-        cap_rect = QRectF(body_rect.left() - body_height * 0.38, body_rect.top() + body_height * 0.15,
-                          body_height * 0.5, body_height * 0.7)
-        painter.setBrush(QColor(55, 55, 55))
-        painter.drawRoundedRect(cap_rect, body_height * 0.25, body_height * 0.25)
-        painter.restore()
-
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(255, 244, 120, 200))
-        stroke_height = height * 0.2
-        stroke_rect = QRectF(width * 0.22, height * 0.72, width * 0.56, stroke_height)
-        painter.drawRoundedRect(stroke_rect, stroke_height * 0.4, stroke_height * 0.4)
-
-        # 在右上角添加"荧"字
-        painter.setPen(QPen(QColor(255, 100, 100), max(1.0, width * 0.03)))  # 红色字体
-        painter.setBrush(QColor(255, 100, 100))
-        
-        # 设置字体 - 增大字体以更醒目
-        font = QFont("Microsoft YaHei", int(max(10, width * 0.5)))
-        font.setBold(True)
-        painter.setFont(font)
-        
-        # 计算"荧"字的位置 - 右上角，增大区域
-        text_rect = QRectF(width * 0.5, height * 0.0, width * 0.5, height * 0.5)
-        painter.drawText(text_rect, Qt.AlignCenter, "荧")
-
-        painter.end()
-        return QIcon(pixmap)
-    def Color_hoveraction(self, hover):  # 鼠标滑过选色按钮时触发的 - 已禁用
-        # 功能已移除，保留函数避免引用错误
-        return
-        # 以下代码已禁用
-        """
-        if hover:
-            try:
-                self.closenomalcolorboxtimer.stop()
-                self.nomalcolorbox.show()
-                print("nomalcolorbox show")
-            except AttributeError:
-                self.nomalcolorbox = HoverGroupbox(self)
-                self.closenomalcolorboxtimer = QTimer(self)
-                btnscolors = [Qt.red, Qt.darkRed, Qt.green, Qt.darkGreen, Qt.blue, Qt.darkBlue, Qt.yellow,
-                              Qt.darkYellow,
-                              Qt.darkCyan, Qt.darkMagenta, Qt.white, QColor(200, 200, 200), Qt.gray, Qt.darkGray,
-                              Qt.black,
-                              QColor(50, 50, 50)]
-                y1 = 0
-                y2 = 30
-                d = 30
-                for i in range((len(btnscolors) + 1) // 2):
-                    btn1 = ColorButton(btnscolors[2 * i], self.nomalcolorbox)
-                    btn1.resize(d, d)
-                    btn1.select_color_signal.connect(self.selectnomal_color)
-                    btn1.move(5 + i * d, y1)
-                    if len(btnscolors) > 2 * i + 1:
-                        btn2 = ColorButton(btnscolors[2 * i + 1], self.nomalcolorbox)
-                        btn2.resize(d, d)
-                        btn2.select_color_signal.connect(self.selectnomal_color)
-                        btn2.move(5 + i * d, y2)
-                self.nomalcolorbox.setGeometry(
-                    self.botton_box.x() + self.choice_clor_btn.x() + self.choice_clor_btn.width() + 1,
-                    self.botton_box.y() - y2 * 2 - 5,
-                    (len(btnscolors) // 2 + 1) * 50 + 10, y2 * 2)
-            except:
-                print(sys.exc_info(), 1150)
-
-            self.nomalcolorbox.hoversignal.connect(self.closenomalcolorboxsignalhandle)
-            self.nomalcolorbox.show()
-            self.nomalcolorbox.raise_()
-
-            self.closenomalcolorboxtimer.timeout.connect(self.closenomalcolorbox)
-            self.closenomalcolorboxtimer.start(2000)
-        """
-
-    def closenomalcolorboxsignalhandle(self, s):  # 关闭常见颜色浮窗的函数
-        if s:
-            try:
-                self.closenomalcolorboxtimer.stop()
-            except:
-                print(sys.exc_info(), 1162)
-        else:
-            print("离开box信号", s)
-
-            self.closenomalcolorboxtimer.start(1000)
-
-    def closenomalcolorbox(self):
-        try:
-            if hasattr(self, 'nomalcolorbox') and self.nomalcolorbox:
-                self.nomalcolorbox.hide()
-                self.nomalcolorbox = None
-            if hasattr(self, 'closenomalcolorboxtimer'):
-                self.closenomalcolorboxtimer.stop()
-        except:
-            print(sys.exc_info())
-
-    def selectnomal_color(self, color):
-        # print(color)
-        self.get_color(QColor(color))
-        # self.nomalcolorbox = None
 
     def get_color(self, color: QColor = None):  # 选择颜色
         if type(color) is not QColor:
@@ -968,13 +850,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 
         except Exception as e:
             print(f"重置文字输入框时出错: {e}")
-
-    def setoriginalpix(self):
-        self.change_tools_fun("")
-        self.setCursor(Qt.ArrowCursor)
-        self.screen_shot(self.originalPix)
-
-        # 移除了清除所有修改提示
 
     def drawcircle_fun(self):
         if self.painter_tools['drawcircle_on']:
@@ -1385,11 +1260,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if hasattr(self.current_pinned_window, '_refresh_from_document'):
                 self.current_pinned_window._refresh_from_document()
             
-            # 清理绘画层（如果有未提交的临时内容）
-            if hasattr(self, 'paintlayer'):
-                paint_pixmap = QPixmap(self.current_pinned_window.width(), self.current_pinned_window.height())
-                paint_pixmap.fill(Qt.transparent)
-                self.paintlayer.setPixmap(paint_pixmap)
+            # 优化：清理绘画层时不创建大图，直接设置为空pixmap
+            if hasattr(self, 'paintlayer') and self.paintlayer:
+                self.paintlayer.setPixmap(QPixmap())  # 空pixmap，避免分配大内存
             
             # 隐藏工具栏
             self.hide_toolbar_for_pinned_window()
@@ -1608,16 +1481,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             get_pix = self.capture_all_screens()
             # get_pix.setDevicePixelRatio(pixRat)  # 注释掉这行，避免DPI缩放
             
-        pixmap = QPixmap(get_pix.width(), get_pix.height())
-        # pixmap.setDevicePixelRatio(pixRat)  # 注释掉这行，避免DPI缩放
-        pixmap.fill(Qt.transparent)  # 填充透明色,不然没有透明通道
-
-        painter = QPainter(pixmap)
-        # painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(0, 0, get_pix)
-        painter.end()  # 一定要end
-        # 优化: 避免不必要的深拷贝，QPixmap是隐式共享的，且pixmap是局部变量
-        self.originalPix = pixmap
+        # 优化: 直接使用get_pix，避免不必要的复制。QPixmap是隐式共享的，只在修改时才真正复制
+        # 移除了中间变量pixmap，节省一份完整屏幕图像的内存
+        self.originalPix = get_pix
         self.vector_document = None
         self._ensure_vector_document()
         
@@ -1625,11 +1491,16 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.setScaledContents(False)  # 禁用自动缩放，保持原始尺寸1:1显示
         self.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 确保图像从左上角开始显示
         
-        self.setPixmap(pixmap)
+        self.setPixmap(get_pix)
         self.mask.setGeometry(0, 0, get_pix.width(), get_pix.height())
         self.paintlayer.setGeometry(0, 0, get_pix.width(), get_pix.height())
-        self.paintlayer.setPixmap(QPixmap(get_pix.width(), get_pix.height()))
-        self.paintlayer.pixmap().fill(Qt.transparent)  # 重点,不然不透明
+        
+        # 优化：延迟创建paintlayer的pixmap，节省100-150MB内存
+        # 只记录尺寸，在第一次绘制时才真正创建
+        self._paintlayer_size = (get_pix.width(), get_pix.height())
+        self._paintlayer_initialized = False
+        # 先设置一个最小的空pixmap占位
+        self.paintlayer.setPixmap(QPixmap(1, 1))
         
         self.text_box.hide()
         self.botton_box.hide()
@@ -2525,9 +2396,13 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 filename = f"pinned_{timestamp}.png"
                 save_path = os.path.join(self.screenshot_save_dir, filename)
                 
-                # 如果有绘画层内容，需要合并后保存
-                if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
-                    # 创建合并图像
+                # 优化：检查是否真的有绘画内容，避免不必要的图像合并
+                has_paint_content = False
+                if hasattr(self, 'vector_document') and self.vector_document:
+                    has_paint_content = len(self.vector_document.commands) > 0
+                
+                if has_paint_content:
+                    # 有绘画内容，需要合并后保存
                     merged_img = QPixmap(self.final_get_img.size())
                     merged_img.fill(Qt.transparent)
                     
@@ -2535,19 +2410,19 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     painter.setRenderHint(QPainter.Antialiasing)
                     # 先绘制原图
                     painter.drawPixmap(0, 0, self.final_get_img)
-                    # 再绘制绘画层
-                    painter.drawPixmap(0, 0, self.paintlayer.pixmap())
+                    # 再绘制绘画层（通过矢量文档渲染）
+                    if hasattr(self, 'paintlayer') and self.paintlayer and self.paintlayer.pixmap():
+                        painter.drawPixmap(0, 0, self.paintlayer.pixmap())
                     painter.end()
                     
                     success = merged_img.save(save_path, "PNG")
+                    print(f"✅ 钉图窗口（含绘画）已自动保存到: {save_path}")
                 else:
-                    # 没有绘画层，直接保存原图
+                    # 没有绘画层内容，直接保存原图（避免不必要的复制）
                     success = self.final_get_img.save(save_path, "PNG")
+                    print(f"✅ 钉图窗口（无绘画）已自动保存到: {save_path}")
                 
-                if success:
-                    print(f"✅ 钉图窗口已自动保存到: {save_path}")
-                    # 移除了已保存提示
-                else:
+                if not success:
                     print(f"❌ 钉图窗口保存失败: {save_path}")
                     
             except Exception as e:
@@ -2565,13 +2440,6 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
 
         self.clear_and_hide()
-
-    def is_alphabet(self, uchar):
-        """判断一个unicode是否是英文字母"""
-        if (u'\u0041' <= uchar <= u'\u005a') or (u'\u0061' <= uchar <= u'\u007a'):
-            return True
-        else:
-            return False
 
     def copy_pinned_image(self):
         """复制钉图窗口的图片（包含绘画内容）"""
@@ -2827,19 +2695,14 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             return
         
         # 正常截图模式的处理
-        transparentpix = self.pixmap().copy()
+        # 优化: 合并两次复制操作，直接在一个pixmap上绘制所有内容
+        pix = self.pixmap().copy()
         paintlayer = self.paintlayer.pixmap()
-        painter = QPainter(transparentpix)
+        painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing)
         if paintlayer:  # 添加安全检查
             painter.drawPixmap(0, 0, paintlayer)
         painter.end()  # 一定要end
-
-        pix = QPixmap(transparentpix.width(), transparentpix.height())
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.drawPixmap(0, 0, transparentpix)
-        p.end()
 
         x0 = min(self.x0, self.x1)
         y0 = min(self.y0, self.y1)
@@ -3242,6 +3105,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 print(f"钉图鼠标按下调试: 有绘图工具={1 in self.painter_tools.values()}, _from_pinned_window={hasattr(event, '_from_pinned_window')}")
             
             if 1 in self.painter_tools.values():  # 如果有绘图工具打开了,说明正在绘图
+                # 【关键】确保paintlayer已初始化 - 在第一次绘制前完成初始化
+                self._ensure_paintlayer_initialized()
+                
                 # 处理坐标，区分是否来自钉图窗口委托
                 if hasattr(event, '_from_pinned_window') and hasattr(self, 'mode') and self.mode == "pinned":
                     # 来自钉图窗口的委托事件，需要转换为相对于绘画层的坐标

@@ -767,7 +767,7 @@ class ScrollCaptureWindow(QWidget):
         self._refresh_preview_panel()
 
     def _position_preview_panel(self):
-        """根据窗口位置调整预览面板，尽量贴近截图区域且避免进入截图区域"""
+        """根据窗口位置调整预览面板，尽量贴近截图区域"""
         if not hasattr(self, 'preview_panel') or self.preview_panel is None:
             return
         panel = self.preview_panel
@@ -777,56 +777,14 @@ class ScrollCaptureWindow(QWidget):
         screen_top = screen_geometry.y()
         screen_right = screen_geometry.x() + screen_geometry.width()
         screen_bottom = screen_geometry.y() + screen_geometry.height()
-        
-        # 截图区域的边界
-        capture_left = self.x()
-        capture_right = self.x() + self.width()
-        capture_top = self.y()
-        capture_bottom = self.y() + self.height()
-        
-        # 尝试1: 右边
-        x_right = capture_right + margin
-        if x_right + panel.width() <= screen_right - margin:
-            # 右边有足够空间，垂直居中
-            x = x_right
-            y = capture_top + (self.height() - panel.height()) // 2
-            y = max(screen_top + margin, min(y, screen_bottom - panel.height() - margin))
-            panel.move(int(x), int(y))
-            return
-        
-        # 尝试2: 左边
-        x_left = capture_left - panel.width() - margin
-        if x_left >= screen_left + margin:
-            # 左边有足够空间，垂直居中
-            x = x_left
-            y = capture_top + (self.height() - panel.height()) // 2
-            y = max(screen_top + margin, min(y, screen_bottom - panel.height() - margin))
-            panel.move(int(x), int(y))
-            return
-        
-        # 尝试3: 上边
-        y_top = capture_top - panel.height() - margin
-        if y_top >= screen_top + margin:
-            # 上边有足够空间，水平居中
-            x = capture_left + (self.width() - panel.width()) // 2
-            x = max(screen_left + margin, min(x, screen_right - panel.width() - margin))
-            y = y_top
-            panel.move(int(x), int(y))
-            return
-        
-        # 尝试4: 下边
-        y_bottom = capture_bottom + margin
-        if y_bottom + panel.height() <= screen_bottom - margin:
-            # 下边有足够空间，水平居中
-            x = capture_left + (self.width() - panel.width()) // 2
-            x = max(screen_left + margin, min(x, screen_right - panel.width() - margin))
-            y = y_bottom
-            panel.move(int(x), int(y))
-            return
-        
-        # 兜底: 放在屏幕右上角（避免进入截图区域）
-        x = screen_right - panel.width() - margin
-        y = screen_top + margin
+        preferred_x = self.x() + self.width() + margin
+        x = preferred_x
+        if x + panel.width() > screen_right - margin:
+            x = self.x() - panel.width() - margin
+        if x < screen_left + margin:
+            x = screen_left + margin
+        preferred_y = self.y() + (self.height() - panel.height()) // 2
+        y = max(screen_top + margin, min(preferred_y, screen_bottom - panel.height() - margin))
         panel.move(int(x), int(y))
 
     def _refresh_preview_panel(self):
