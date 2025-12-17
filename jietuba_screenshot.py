@@ -41,6 +41,7 @@ from jietuba_ui_components import (
 )
 from jietuba_drawing import MaskLayer, PaintLayer, get_line_interpolation
 from jietuba_toolbar import ToolbarManager
+from jietuba_smart_capture import SmartScreenCapture  # DXGI 智能捕获
 
 # ================== 多屏调试开关 ==================
 
@@ -64,6 +65,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         # self.pixmap()=QPixmap()
         self.left_button_push = False
+        
+        # 智能捕获器（延迟初始化）
+        self._smart_capture = None
 
     def setup(self,mode = "screenshot"):  # 初始化界面
         self.on_init = True
@@ -1360,89 +1364,35 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         return x, y
 
     def capture_all_screens(self):
-        """捕获所有显示器截图并拼接成虚拟桌面 (含调试输出)"""
+        """
+        捕获所有显示器截图并拼接成虚拟桌面
+        使用 DXGI 智能捕获器（自动降级到 Qt5）
+        """
         try:
-            screens = QApplication.screens()
-            _debug_print(f"Qt 检测到 {len(screens)} 个 QScreen")
-
-            win_monitors = _enumerate_win_monitors()
-            if win_monitors:
-                for idx, m in enumerate(win_monitors, 1):
-                    _debug_print(f"Win32 显示器{idx}: 设备={m['device']} 区域={m['rect']} 主屏={m['primary']}")
-            else:
-                _debug_print("Win32 未能枚举到显示器或枚举失败")
-
-            if len(screens) != len(win_monitors) and win_monitors:
-                _debug_print("⚠️ Qt 与 Win32 显示器数量不一致，可能 Qt 未感知外接屏 (DPI/权限/会话)")
-
-            # 汇总边界
-            min_x = min_y = float('inf')
-            max_x = max_y = float('-inf')
-            captures = []
-
-            for i, screen in enumerate(screens):
-                pm = screen.grabWindow(0)
-                geo = screen.geometry()
-                try:
-                    name = screen.name()
-                except Exception:
-                    name = f"Screen{i+1}"
-                _debug_print(f"QScreen {i+1}: 名称={name} 分辨率={geo.width()}x{geo.height()} 位置=({geo.x()},{geo.y()}) dpr={screen.devicePixelRatio():.2f}")
-                _debug_print(f"  抓取Pixmap={pm.width()}x{pm.height()}")
-
-                captures.append({
-                    'pixmap': pm,
-                    'x': geo.x(),
-                    'y': geo.y(),
-                    'w': geo.width(),
-                    'h': geo.height(),
-                })
-                min_x = min(min_x, geo.x())
-                min_y = min(min_y, geo.y())
-                max_x = max(max_x, geo.x() + geo.width())
-                max_y = max(max_y, geo.y() + geo.height())
-
-            total_width = max_x - min_x
-            total_height = max_y - min_y
-            _debug_print(f"虚拟桌面: size={total_width}x{total_height} offset=({min_x},{min_y})")
-
-            if len(captures) == 1:
-                _debug_print("只有一个显示器 -> 直接返回")
-                self.virtual_desktop_offset_x = 0
-                self.virtual_desktop_offset_y = 0
-                self.virtual_desktop_width = captures[0]['w']
-                self.virtual_desktop_height = captures[0]['h']
-                self.virtual_desktop_min_x = 0
-                self.virtual_desktop_min_y = 0
-                self.virtual_desktop_max_x = captures[0]['w']
-                self.virtual_desktop_max_y = captures[0]['h']
-                return captures[0]['pixmap']
-
-            combined = QPixmap(total_width, total_height)
-            combined.fill(Qt.black)
-            painter = QPainter(combined)
-            for i, cap in enumerate(captures):
-                rx = cap['x'] - min_x
-                ry = cap['y'] - min_y
-                painter.drawPixmap(rx, ry, cap['pixmap'])
-                _debug_print(f"合成: Screen{i+1} -> ({rx},{ry}) size={cap['w']}x{cap['h']}")
-            painter.end()
-
-            # 保存位置信息
-            self.virtual_desktop_offset_x = min_x
-            self.virtual_desktop_offset_y = min_y
-            self.virtual_desktop_width = total_width
-            self.virtual_desktop_height = total_height
-            self.virtual_desktop_min_x = min_x
-            self.virtual_desktop_min_y = min_y
-            self.virtual_desktop_max_x = max_x
-            self.virtual_desktop_max_y = max_y
-            _debug_print(f"合成完成: {combined.width()}x{combined.height()} 范围=({min_x},{min_y})~({max_x},{max_y})")
-            return combined
+            # 延迟初始化智能捕获器（首次调用时才创建）
+            if self._smart_capture is None:
+                self._smart_capture = SmartScreenCapture(enable_dxgi=True)
+            
+            # 使用智能捕获器
+            pixmap, virtual_info = self._smart_capture.capture_all_screens()
+            
+            # 保存虚拟桌面信息
+            self.virtual_desktop_offset_x = virtual_info['offset_x']
+            self.virtual_desktop_offset_y = virtual_info['offset_y']
+            self.virtual_desktop_width = virtual_info['width']
+            self.virtual_desktop_height = virtual_info['height']
+            self.virtual_desktop_min_x = virtual_info['min_x']
+            self.virtual_desktop_min_y = virtual_info['min_y']
+            self.virtual_desktop_max_x = virtual_info['max_x']
+            self.virtual_desktop_max_y = virtual_info['max_y']
+            
+            _debug_print(f"✅ 截图完成: {pixmap.width()}x{pixmap.height()}")
+            return pixmap
+            
         except Exception as e:
-            _debug_print(f"捕获多屏失败，回退主屏: {e}")
+            _debug_print(f"❌ 捕获失败，使用主屏: {e}")
+            # 最后的降级方案：直接用主屏
             primary = QApplication.primaryScreen().grabWindow(0)
-            # 基本默认
             self.virtual_desktop_offset_x = 0
             self.virtual_desktop_offset_y = 0
             self.virtual_desktop_width = primary.width()

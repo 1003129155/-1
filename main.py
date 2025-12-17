@@ -604,6 +604,9 @@ class MainWindow(QMainWindow):
         # 预加载设置对话框（延迟创建，避免阻塞启动）
         self._settings_dialog = None
         QTimer.singleShot(1000, self._preload_settings_dialog)
+        
+        # 预热 DXGI 捕获器（避免首次截图慢）
+        QTimer.singleShot(1500, self._warm_up_screenshot_capture)
 
     def _preload_settings_dialog(self):
         """预加载设置对话框，避免首次打开时卡顿"""
@@ -619,6 +622,20 @@ class MainWindow(QMainWindow):
                 print("✅ [预加载] 设置对话框预加载完成")
         except Exception as e:
             print(f"⚠️ [预加载] 设置对话框预加载失败: {e}")
+    
+    def _warm_up_screenshot_capture(self):
+        """预热截图捕获器（DXGI 初始化）"""
+        try:
+            print("🔥 [预热] 开始初始化 DXGI 捕获器...")
+            # 触发 DXGI 初始化（首次调用会创建）
+            if hasattr(self.screenshot_widget, '_smart_capture') and self.screenshot_widget._smart_capture is None:
+                from jietuba_smart_capture import SmartScreenCapture
+                self.screenshot_widget._smart_capture = SmartScreenCapture(enable_dxgi=True)
+                print("✅ [预热] DXGI 捕获器预热完成")
+            else:
+                print("ℹ️ [预热] 捕获器已初始化，跳过")
+        except Exception as e:
+            print(f"⚠️ [预热] DXGI 预热失败（不影响使用）: {e}")
     
     def _setup_window_monitor(self):
         """设置窗口状态监控，防止窗口状态异常"""
