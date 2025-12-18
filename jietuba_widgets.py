@@ -908,6 +908,34 @@ class Freezer(QLabel):
         except Exception as e:
             print(f"⚠️ [OCR] 初始化失败: {e}")
 
+    def closeEvent(self, event):
+        self._is_closed = True
+        
+        # 安全停止 OCR 线程
+        if hasattr(self, 'ocr_thread') and self.ocr_thread is not None:
+            if self.ocr_thread.isRunning():
+                print("⚠️ [OCR] 窗口关闭，OCR 线程仍在运行，将其分离以在后台完成...")
+                # 断开所有信号，防止回调
+                try:
+                    self.ocr_thread.finished.disconnect()
+                except:
+                    pass
+                
+                # 重设父对象，防止随窗口销毁
+                self.ocr_thread.setParent(None)
+                
+                # 线程结束后自动删除
+                self.ocr_thread.finished.connect(self.ocr_thread.deleteLater)
+                
+                # 既然分离了，就不需要在这里 wait 了
+                self.ocr_thread = None
+            else:
+                # 如果线程已经停止，直接清理
+                self.ocr_thread.deleteLater()
+                self.ocr_thread = None
+            
+        super().closeEvent(event)
+
     # ======================== 矢量绘制辅助 ========================
     def _current_display_size(self) -> Tuple[int, int]:
         if hasattr(self, 'paintlayer') and self.paintlayer:
@@ -2210,11 +2238,15 @@ class Freezer(QLabel):
                 except Exception:
                     self._drag_offset = QPoint(self.p_x, self.p_y)
                 
-                # 移动开始时隐藏工具栏，提升视觉流畅度
+                # 移动开始时记录工具栏的显示状态，然后隐藏以提升视觉流畅度
+                self._toolbar_was_visible_before_drag = False
+                self._paint_tools_was_visible_before_drag = False
                 if self.main_window:
                     if hasattr(self.main_window, 'botton_box'):
+                        self._toolbar_was_visible_before_drag = self.main_window.botton_box.isVisible()
                         self.main_window.botton_box.hide()
                     if hasattr(self.main_window, 'paint_tools_menu'):
+                        self._paint_tools_was_visible_before_drag = self.main_window.paint_tools_menu.isVisible()
                         self.main_window.paint_tools_menu.hide()
             # self.resize(self.width()/2,self.height()/2)
             # self.setPixmap(self.pixmap().scaled(self.pixmap().width()/2,self.pixmap().height()/2))
@@ -2264,14 +2296,23 @@ class Freezer(QLabel):
                 # 1. 检查 DPI 变化（处理跨屏拖动）
                 self.check_and_adjust_for_dpi_change()
                 
-                # 2. 更新工具栏位置并显示
+                # 2. 更新工具栏位置并恢复显示状态
                 if self.main_window:
                     # 如果启用了自动显示工具栏，则重新显示并定位
                     if self._is_auto_toolbar_enabled() and hasattr(self.main_window, 'show_toolbar_for_pinned_window'):
                         self.main_window.show_toolbar_for_pinned_window(self)
-                    elif hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
-                        # 否则只更新位置（如果它是可见的）
-                        self.main_window.position_toolbar_for_pinned_window(self)
+                    else:
+                        # 否则恢复移动前的显示状态
+                        if hasattr(self, '_toolbar_was_visible_before_drag') and self._toolbar_was_visible_before_drag:
+                            if hasattr(self.main_window, 'botton_box'):
+                                self.main_window.botton_box.show()
+                        if hasattr(self, '_paint_tools_was_visible_before_drag') and self._paint_tools_was_visible_before_drag:
+                            if hasattr(self.main_window, 'paint_tools_menu'):
+                                self.main_window.paint_tools_menu.show()
+                        
+                        # 更新工具栏位置
+                        if hasattr(self.main_window, 'position_toolbar_for_pinned_window'):
+                            self.main_window.position_toolbar_for_pinned_window(self)
                         
                     # 重置节流计时器，确保下次移动能立即响应
                     self._last_toolbar_update_time = 0
@@ -2822,29 +2863,29 @@ class Freezer(QLabel):
         # 清理OCR线程（必须在OCR层之前清理）
         if hasattr(self, 'ocr_thread') and self.ocr_thread:
             try:
-                # 如果线程还在运行，尝试终止
+                # 如果线程还在运行，不强制终止（避免 onnxruntime 访问冲突）
                 if self.ocr_thread.isRunning():
-                    print(f"🧹 [内存清理] OCR线程还在运行，等待终止...")
+                    print(f"🧹 [内存清理] OCR线程还在运行，标记为孤儿线程...")
                     # 断开finished信号，防止回调触发
                     try:
                         self.ocr_thread.finished.disconnect()
                     except:
                         pass
                     
-                    self.ocr_thread.quit()
-                    self.ocr_thread.wait(1000)  # 等待最多1秒
-                    if self.ocr_thread.isRunning():
-                        print(f"⚠️ [内存清理] OCR线程未能在1秒内停止，强制终止")
-                        self.ocr_thread.terminate()
-                        self.ocr_thread.wait(500)
+                    # ⚠️ 不调用 terminate()，让 onnxruntime 自然结束
+                    # 将线程标记为 daemon 式，让它在后台自然完成
+                    self.ocr_thread.setParent(None)  # 解除父子关系
+                    # 线程结束后自动删除
+                    self.ocr_thread.finished.connect(self.ocr_thread.deleteLater)
+                    print(f"⚠️ [内存清理] OCR线程将在后台继续执行直到完成（避免强制终止导致崩溃）")
                 else:
                     # 线程已结束，断开信号连接
                     try:
                         self.ocr_thread.finished.disconnect()
                     except:
                         pass
+                    self.ocr_thread.deleteLater()
                 
-                self.ocr_thread.deleteLater()
                 self.ocr_thread = None
                 print(f"✅ [内存清理] OCR线程已清理")
             except Exception as e:

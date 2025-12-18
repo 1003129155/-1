@@ -53,6 +53,11 @@ from jietuba_logger import get_logger
 import ctypes
 from ctypes import wintypes
 
+# Windows 显示器变化监听
+import win32gui
+import win32con
+import win32api
+
 WM_HOTKEY = 0x0312
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -148,6 +153,71 @@ class _HotkeyEventFilter(QAbstractNativeEventFilter):
             # 忽略解析异常，保持应用稳定
             return False, 0
         return False, 0
+
+
+class DisplayChangeListener:
+    """监听 Windows 显示器配置变化（使用隐藏窗口接收 WM_DISPLAYCHANGE）"""
+    
+    def __init__(self, callback):
+        self.callback = callback
+        self.hwnd = None
+        self._create_window()
+        print("✅ [显示器监听] DisplayChangeListener 已启动")
+    
+    def _create_window(self):
+        """创建隐藏窗口来接收 WM_DISPLAYCHANGE 消息"""
+        try:
+            wc = win32gui.WNDCLASS()
+            wc.lpfnWndProc = self._wnd_proc
+            wc.lpszClassName = "JietubaDisplayChangeListener"
+            wc.hInstance = win32api.GetModuleHandle(None)
+            
+            try:
+                win32gui.RegisterClass(wc)
+            except Exception as e:
+                # 类可能已经注册过了
+                print(f"ℹ️ [显示器监听] 窗口类已存在: {e}")
+            
+            self.hwnd = win32gui.CreateWindow(
+                wc.lpszClassName,
+                "jietuba_display_listener",
+                0,  # 不可见窗口
+                0, 0, 0, 0,
+                0,  # 无父窗口
+                0,  # 无菜单
+                wc.hInstance,
+                None
+            )
+            
+            if self.hwnd:
+                print(f"✅ [显示器监听] 隐藏窗口已创建 (HWND={self.hwnd})")
+            else:
+                print("❌ [显示器监听] 创建隐藏窗口失败")
+                
+        except Exception as e:
+            print(f"❌ [显示器监听] 创建窗口时出错: {e}")
+    
+    def _wnd_proc(self, hwnd, msg, wparam, lparam):
+        """窗口过程函数，处理 WM_DISPLAYCHANGE 消息"""
+        if msg == win32con.WM_DISPLAYCHANGE:
+            print("\n🔔 [显示器监听] 检测到 WM_DISPLAYCHANGE 消息！")
+            if self.callback:
+                try:
+                    # 使用 QTimer 在 Qt 主线程中执行回调
+                    QTimer.singleShot(200, self.callback)
+                except Exception as e:
+                    print(f"❌ [显示器监听] 回调执行出错: {e}")
+        
+        return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+    
+    def cleanup(self):
+        """清理资源"""
+        if self.hwnd:
+            try:
+                win32gui.DestroyWindow(self.hwnd)
+                print("✅ [显示器监听] 窗口已销毁")
+            except Exception as e:
+                print(f"⚠️ [显示器监听] 销毁窗口时出错: {e}")
 
 
 class WindowsHotkeyManager:
@@ -622,18 +692,110 @@ class MainWindow(QMainWindow):
     
     def _setup_window_monitor(self):
         """设置窗口状态监控，防止窗口状态异常"""
-        # 记录初始显示器配置
+        # 记录初始显示器配置（使用 win32api 获取准确信息）
+        self._last_monitor_info = self._get_win32_monitor_info()
         self._last_screen_count = len(QApplication.screens())
         self._last_primary_screen_geometry = QApplication.primaryScreen().geometry()
         self._last_dpi_ratio = self._get_current_screen_dpi_ratio(QApplication.primaryScreen())
         
+        print(f"🔍 [显示器监听] 初始配置: Win32屏幕数={len(self._last_monitor_info)}, Qt屏幕数={self._last_screen_count}")
+        
+        # 启动 DisplayChangeListener（使用 win32gui 隐藏窗口监听 WM_DISPLAYCHANGE）
+        try:
+            self.display_change_listener = DisplayChangeListener(self._on_display_change)
+        except Exception as e:
+            print(f"❌ [显示器监听] 启动失败: {e}")
+            self.display_change_listener = None
+        
+        # 保留定时器作为备用检查（降低频率）
         self.window_monitor_timer = QTimer()
         self.window_monitor_timer.timeout.connect(self._check_window_state)
-        self.window_monitor_timer.start(5000)  # 5秒检查一次（更频繁以快速响应显示器变化）
-        print("🔍 [DEBUG] 窗口状态监控已启动")
+        self.window_monitor_timer.start(30000)  # 30秒检查一次（作为备用）
+        print("🔍 [DEBUG] 窗口状态监控已启动（备用定时器）")
+    
+    def _get_win32_monitor_info(self):
+        """使用 win32api 获取显示器信息（比 Qt 更及时准确）"""
+        try:
+            monitors = win32api.EnumDisplayMonitors()
+            info_list = []
+            for hMonitor, hdc, rect in monitors:
+                info = win32api.GetMonitorInfo(hMonitor)
+                info_list.append({
+                    'rect': info['Monitor'],
+                    'work': info['Work'],
+                    'primary': info['Flags'] == 1
+                })
+            return info_list
+        except Exception as e:
+            print(f"⚠️ [显示器监听] 获取Win32显示器信息失败: {e}")
+            return []
+    
+    def _on_display_change(self):
+        """显示器配置变化的回调函数（由 WM_DISPLAYCHANGE 触发）"""
+        print("\n🔔 [显示器监听] _on_display_change 被调用")
+        
+        # 先用 win32api 获取最新的显示器信息（比 Qt 更及时）
+        current_monitor_info = self._get_win32_monitor_info()
+        
+        print(f"🔍 [显示器监听] Win32显示器数: {len(self._last_monitor_info)} -> {len(current_monitor_info)}")
+        if current_monitor_info:
+            for idx, monitor in enumerate(current_monitor_info, 1):
+                print(f"   显示器{idx}: rect={monitor['rect']}, primary={monitor['primary']}")
+        
+        # 检查 Win32 层面的变化
+        monitor_changed = len(current_monitor_info) != len(self._last_monitor_info)
+        
+        if not monitor_changed and current_monitor_info:
+            # 数量相同，检查位置或大小是否变化
+            for old, new in zip(self._last_monitor_info, current_monitor_info):
+                if old['rect'] != new['rect']:
+                    monitor_changed = True
+                    break
+        
+        if monitor_changed:
+            print("✅ [显示器监听] Win32确认检测到显示器配置变化！")
+            
+            # 不需要等待Qt更新，因为我们用mss截图，不依赖Qt
+            # 直接刷新截图缓存和窗口配置
+            print("🔄 [显示器监听] 刷新截图缓存（使用mss，不依赖Qt）")
+            self._schedule_screen_cache_refresh()
+            
+            # 延迟一点执行其他更新
+            QTimer.singleShot(500, self._apply_display_change_simple)
+            
+            # 更新 Win32 记录
+            self._last_monitor_info = current_monitor_info
+        else:
+            print("ℹ️ [显示器监听] Win32未检测到实际配置变化")
+    
+    def _apply_display_change_simple(self):
+        """应用显示器变化（简化版，不等待Qt）"""
+        print("🔄 [显示器监听] 应用显示器配置更新")
+        
+        # 重新设置窗口大小
+        self._setup_window_size()
+        
+        # 重新定位任务栏按钮
+        if hasattr(self, 'taskbar_button') and self.taskbar_button and self.taskbar_button.isVisible():
+            self.taskbar_button.position_at_taskbar()
+        
+        print("✅ [显示器监听] 显示器配置更新完成")
+    
+    def _apply_display_change_simple(self):
+        """应用显示器变化（简化版，不等待Qt）"""
+        print("🔄 [显示器监听] 应用显示器配置更新")
+        
+        # 重新设置窗口大小
+        self._setup_window_size()
+        
+        # 重新定位任务栏按钮
+        if hasattr(self, 'taskbar_button') and self.taskbar_button and self.taskbar_button.isVisible():
+            self.taskbar_button.position_at_taskbar()
+        
+        print("✅ [显示器监听] 显示器配置更新完成")
     
     def _check_window_state(self):
-        """检查窗口状态，自动修复异常，包括显示器配置变化"""
+        """检查窗口状态，自动修复异常，包括显示器配置变化（备用检查）"""
         try:
             # 检查显示器配置是否发生变化
             current_screen_count = len(QApplication.screens())
@@ -648,7 +810,7 @@ class MainWindow(QMainWindow):
             )
             
             if screen_config_changed:
-                print("🔍 [MONITOR] 检测到显示器配置变化，重新调整窗口大小...")
+                print("\n🔍 [备用监听] 定时器检测到显示器配置变化（WM_DISPLAYCHANGE可能未触发）")
                 print(f"   屏幕数量: {self._last_screen_count} -> {current_screen_count}")
                 print(f"   主屏几何: {self._last_primary_screen_geometry} -> {current_primary_screen_geometry}")
                 print(f"   DPI比例: {self._last_dpi_ratio:.2f} -> {current_dpi_ratio:.2f}")
@@ -691,20 +853,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"❌ [ERROR] 窗口状态检查时出错: {e}")
 
-    def _schedule_screen_cache_refresh(self):
-        """在后台线程刷新屏幕缓存，避免阻塞UI线程。"""
-        if getattr(self, '_screen_cache_refresh_inflight', False):
-            return
-
-        def _do_refresh():
-            try:
-                if hasattr(self, 'screenshot_widget') and self.screenshot_widget:
-                    self.screenshot_widget.refresh_screen_cache()
-            finally:
-                self._screen_cache_refresh_inflight = False
-
-        self._screen_cache_refresh_inflight = True
-        threading.Thread(target=_do_refresh, daemon=True).start()
+    # _schedule_screen_cache_refresh 已删除：该功能已被 DisplayChangeListener 替代
 
     def _setup_screenshot(self):
         """初始化截图组件"""
@@ -1000,7 +1149,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         
         # 版本信息
-        self.version_label = QLabel("バージョン: 1.15 | 更新日: 2025.12/16")
+        self.version_label = QLabel("バージョン: 1.16 | 更新日: 2025.12/18")
         self.version_label.setObjectName("versionLabel")
         self.version_label.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.version_label)

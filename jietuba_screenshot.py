@@ -33,6 +33,9 @@ from jietuba_public import Commen_Thread, TipsShower, PLATFORM_SYS,CONFIG_DICT, 
 import jietuba_resource
 from pynput.mouse import Controller
 
+# 使用 mss 进行截图（比Qt更准确，直接使用系统API）
+import mss
+
 # 导入重构后的模块
 from jietuba_ui_components import (
     _debug_print, _enumerate_win_monitors, _enumerate_monitor_dpi,
@@ -184,44 +187,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.backup_pic_list = []  # 备份页面的数组,用于前进/后退
         self._in_undo_operation = False  # 防止撤销操作冲突的标志
         self.on_init = False
+        
+        # 🔥 创建并复用 mss 实例，避免 PyInstaller 环境下的 subprocess 崩溃
+        self._mss_instance = None
 
-    def refresh_screen_cache(self):
-        """由主程序调用，强制刷新屏幕缓存（解决休眠后拔插显示器问题）"""
-        try:
-            print("🔄 [截图] 收到屏幕变化通知，刷新缓存...")
-            if not sys.platform.startswith("win"):
-                print("ℹ️ [截图] 非Windows环境，跳过刷新")
-                return
-
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            HWND_BROADCAST = 0xFFFF
-            WM_SETTINGCHANGE = 0x001A
-            SMTO_ABORTIFHUNG = 0x0002
-            SMTO_NOTIMEOUTIFNOTHUNG = 0x0008
-            timeout_ms = 200
-
-            start = time.time()
-            result = wintypes.DWORD()
-            ok = user32.SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0,
-                0,
-                SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG,
-                timeout_ms,
-                ctypes.byref(result)
-            )
-
-            if ok == 0:
-                last_error = kernel32.GetLastError()
-                print(f"⚠️ [截图] SendMessageTimeout 超时/失败(err={last_error})，改用 PostMessage")
-                user32.PostMessageW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0)
-            else:
-                cost = (time.time() - start) * 1000
-                print(f"✅ [截图] 屏幕缓存刷新完成，耗时 {cost:.1f} ms")
-        except Exception as e:
-            print(f"⚠️ [截图] 刷新屏幕缓存失败: {e}")
+    # refresh_screen_cache 已删除：该功能已被 Win32 DisplayChangeListener 替代
 
     def init_parameters(self):  # 初始化参数
         self.NpainterNmoveFlag = self.choicing = self.move_rect = self.move_y0 = self.move_x0 = self.move_x1 \
@@ -1360,112 +1330,77 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         return x, y
 
     def capture_all_screens(self):
-        """捕获所有显示器截图并拼接成虚拟桌面 (含调试输出)"""
+        """使用 mss 捕获所有显示器截图并拼接成虚拟桌面（比Qt更准确）"""
         try:
-            screens = QApplication.screens()
-            _debug_print(f"Qt 检测到 {len(screens)} 个 QScreen")
-
-            win_monitors = _enumerate_win_monitors()
-            if win_monitors:
-                for idx, m in enumerate(win_monitors, 1):
-                    _debug_print(f"Win32 显示器{idx}: 设备={m['device']} 区域={m['rect']} 主屏={m['primary']}")
-            else:
-                _debug_print("Win32 未能枚举到显示器或枚举失败")
-
-            if len(screens) != len(win_monitors) and win_monitors:
-                _debug_print("⚠️ Qt 与 Win32 显示器数量不一致，可能 Qt 未感知外接屏 (DPI/权限/会话)")
-
-            # 汇总边界
-            min_x = min_y = float('inf')
-            max_x = max_y = float('-inf')
-            captures = []
-
-            for i, screen in enumerate(screens):
-                pm = screen.grabWindow(0)
-                geo = screen.geometry()
-                try:
-                    name = screen.name()
-                except Exception:
-                    name = f"Screen{i+1}"
-                _debug_print(f"QScreen {i+1}: 名称={name} 分辨率={geo.width()}x{geo.height()} 位置=({geo.x()},{geo.y()}) dpr={screen.devicePixelRatio():.2f}")
-                _debug_print(f"  抓取Pixmap={pm.width()}x{pm.height()}")
-
-                captures.append({
-                    'pixmap': pm,
-                    'x': geo.x(),
-                    'y': geo.y(),
-                    'w': geo.width(),
-                    'h': geo.height(),
-                })
-                min_x = min(min_x, geo.x())
-                min_y = min(min_y, geo.y())
-                max_x = max(max_x, geo.x() + geo.width())
-                max_y = max(max_y, geo.y() + geo.height())
-
-            total_width = max_x - min_x
-            total_height = max_y - min_y
-            _debug_print(f"虚拟桌面: size={total_width}x{total_height} offset=({min_x},{min_y})")
-
-            if len(captures) == 1:
-                _debug_print("只有一个显示器 -> 直接返回")
-                self.virtual_desktop_offset_x = 0
-                self.virtual_desktop_offset_y = 0
-                self.virtual_desktop_width = captures[0]['w']
-                self.virtual_desktop_height = captures[0]['h']
-                self.virtual_desktop_min_x = 0
-                self.virtual_desktop_min_y = 0
-                self.virtual_desktop_max_x = captures[0]['w']
-                self.virtual_desktop_max_y = captures[0]['h']
-                return captures[0]['pixmap']
-
-            combined = QPixmap(total_width, total_height)
-            combined.fill(Qt.black)
-            painter = QPainter(combined)
-            for i, cap in enumerate(captures):
-                rx = cap['x'] - min_x
-                ry = cap['y'] - min_y
-                painter.drawPixmap(rx, ry, cap['pixmap'])
-                _debug_print(f"合成: Screen{i+1} -> ({rx},{ry}) size={cap['w']}x{cap['h']}")
-            painter.end()
-
-            # 保存位置信息
+            # 复用 mss 实例，避免 PyInstaller 环境下的 subprocess 崩溃
+            if self._mss_instance is None:
+                self._mss_instance = mss.mss()
+            
+            sct = self._mss_instance
+            # 获取全部显示器的合并区域（monitors[0]）
+            monitors = sct.monitors
+            all_monitors = monitors[0]
+            
+            _debug_print(f"📺 [MSS] 检测到 {len(monitors)-1} 个显示器, 虚拟桌面 {all_monitors['width']}x{all_monitors['height']}")
+            
+            # 截取整个虚拟桌面
+            screenshot = sct.grab(all_monitors)
+            
+            # 优化：直接使用 mss 的 bgra 数据创建 QImage，避免拷贝
+            # mss 的 screenshot.bgra 是 bytes 对象，可以直接传给 QImage
+            width = screenshot.width
+            height = screenshot.height
+            bytes_per_line = width * 4
+            
+            # 使用 Format_ARGB32 因为它的内存布局在小端系统上是 BGRA（与mss一致）
+            # 这样可以避免手动转换通道，零拷贝创建 QImage
+            qimage = QImage(screenshot.bgra, width, height, bytes_per_line, QImage.Format_ARGB32)
+            
+            # 转换为 QPixmap（这里会拷贝一次，但这是必要的）
+            combined = QPixmap.fromImage(qimage)
+            
+            # 保存虚拟桌面信息
+            min_x = all_monitors['left']
+            min_y = all_monitors['top']
+            total_width = all_monitors['width']
+            total_height = all_monitors['height']
+            
             self.virtual_desktop_offset_x = min_x
             self.virtual_desktop_offset_y = min_y
             self.virtual_desktop_width = total_width
             self.virtual_desktop_height = total_height
             self.virtual_desktop_min_x = min_x
             self.virtual_desktop_min_y = min_y
-            self.virtual_desktop_max_x = max_x
-            self.virtual_desktop_max_y = max_y
-            _debug_print(f"合成完成: {combined.width()}x{combined.height()} 范围=({min_x},{min_y})~({max_x},{max_y})")
+            self.virtual_desktop_max_x = min_x + total_width
+            self.virtual_desktop_max_y = min_y + total_height
+            
+            _debug_print(f"📺 [MSS] 截图完成: {combined.width()}x{combined.height()}, 内存优化: 避免了numpy转换")
             return combined
+                
         except Exception as e:
-            _debug_print(f"捕获多屏失败，回退主屏: {e}")
+            _debug_print(f"❌ [MSS] 截图失败: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # 回退到Qt方法
+            _debug_print("⚠️ [MSS] 回退使用Qt截图")
             primary = QApplication.primaryScreen().grabWindow(0)
-            # 基本默认
-            self.virtual_desktop_offset_x = 0
-            self.virtual_desktop_offset_y = 0
-            self.virtual_desktop_width = primary.width()
-            self.virtual_desktop_height = primary.height()
-            self.virtual_desktop_min_x = 0
-            self.virtual_desktop_min_y = 0
-            self.virtual_desktop_max_x = primary.width()
-            self.virtual_desktop_max_y = primary.height()
+            geo = QApplication.primaryScreen().geometry()
+            self.virtual_desktop_offset_x = geo.x()
+            self.virtual_desktop_offset_y = geo.y()
+            self.virtual_desktop_width = geo.width()
+            self.virtual_desktop_height = geo.height()
+            self.virtual_desktop_min_x = geo.x()
+            self.virtual_desktop_min_y = geo.y()
+            self.virtual_desktop_max_x = geo.x() + geo.width()
+            self.virtual_desktop_max_y = geo.y() + geo.height()
             return primary
 
     def screen_shot(self, pix=None,mode = "screenshot"):
         """mode: screenshot、set_area、getpix。screenshot普通截屏;非截屏模式: set_area用于设置区域、getpix提取区域"""
         # 截屏函数,功能有二:当有传入pix时直接显示pix中的图片作为截屏背景,否则截取当前屏幕作为背景;前者用于重置所有修改
-        # if PLATFORM_SYS=="darwin":
         self.sshoting = True
         t1 = time.process_time()
-        
-        # 性能优化：只在开始时调用一次 processEvents()，刷新屏幕信息和DPI
-        # 这样可以确保获取最新的显示器布局（防止休眠后拔插显示器）
-        QApplication.processEvents()
-        QApplication.instance().sync()  # 同步所有待处理的窗口系统事件
-        
-
         
         if type(pix) is QPixmap:
             get_pix = pix
@@ -1473,11 +1408,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         else:
             self.setup(mode)  # 初始化截屏
             
-            # 关键修复2: 在截图前清除所有可能影响的窗口几何缓存
+            # 清除窗口几何缓存
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)  # Qt最大尺寸
             
-            # 修改：现在截取所有显示器而不是单个显示器
+            # 使用 mss 截取所有显示器（不依赖Qt的屏幕信息缓存）
             get_pix = self.capture_all_screens()
             # get_pix.setDevicePixelRatio(pixRat)  # 注释掉这行，避免DPI缩放
             
@@ -1508,12 +1443,24 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         # 关键修复：在显示窗口前就恢复透明度，避免闪烁
         self.setWindowOpacity(1.0)
 
-        multi_screen = len(QApplication.screens()) > 1
-        if multi_screen:
-            # 多显示器：使用 capture_all_screens 生成的几何
-            _debug_print(f"多显示器模式：偏移({self.virtual_desktop_offset_x},{self.virtual_desktop_offset_y}) 尺寸={self.virtual_desktop_width}x{self.virtual_desktop_height}")
+        # 使用 mss 获取的虚拟桌面尺寸，不依赖 Qt 的 screens() 数量
+        # 只要虚拟桌面不是从 (0,0) 开始，或者有负坐标，就说明是多显示器
+        is_multi_screen = (
+            self.virtual_desktop_min_x != 0 or 
+            self.virtual_desktop_min_y != 0 or
+            self.virtual_desktop_offset_x != 0 or
+            self.virtual_desktop_offset_y != 0
+        )
+        
+        _debug_print(f"📺 [窗口设置] 虚拟桌面: offset=({self.virtual_desktop_offset_x},{self.virtual_desktop_offset_y}) "
+                   f"尺寸={self.virtual_desktop_width}x{self.virtual_desktop_height} "
+                   f"范围=({self.virtual_desktop_min_x},{self.virtual_desktop_min_y})~({self.virtual_desktop_max_x},{self.virtual_desktop_max_y})")
+        _debug_print(f"📺 [窗口设置] 多显示器模式: {is_multi_screen}")
+        
+        if is_multi_screen:
+            # 多显示器：使用 mss 返回的虚拟桌面几何
+            _debug_print(f"📺 [窗口设置] 使用虚拟桌面模式")
             
-            # 关键修复4: 使用更稳定的窗口设置顺序
             # 先设置几何位置和大小
             self.setGeometry(
                 self.virtual_desktop_min_x, 
@@ -1522,25 +1469,21 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.virtual_desktop_height
             )
             
-            # 然后锁定大小，避免 QLabel 根据内容再次回缩
+            # 然后锁定大小
             self.setFixedSize(self.virtual_desktop_width, self.virtual_desktop_height)
             
-            # 优化：删除此处的 processEvents()，showNormal() 会自动触发窗口刷新
-            
             # 显示窗口
-            self.showNormal()  # 使用showNormal而不是show，确保不是最小化状态
+            self.showNormal()
             self.raise_()
             self.activateWindow()
             
-            # 优化：删除此处的 processEvents()，只在需要验证几何时才调用
-            
             # 验证几何是否正确
             g2 = self.geometry()
-            _debug_print(f"初次显示几何: pos=({g2.x()},{g2.y()}) size={g2.width()}x{g2.height()}")
+            _debug_print(f"📺 [窗口设置] 初次显示几何: pos=({g2.x()},{g2.y()}) size={g2.width()}x{g2.height()}")
             
             # 如果几何不匹配，使用Win32 API强制设置
             if g2.width() != self.virtual_desktop_width or g2.height() != self.virtual_desktop_height:
-                _debug_print(f"初次几何不匹配，尝试Win32强制设置 {g2.width()}x{g2.height()} -> {self.virtual_desktop_width}x{self.virtual_desktop_height}")
+                _debug_print(f"⚠️ [窗口设置] 几何不匹配，使用Win32强制设置")
                 try:
                     import ctypes
                     user32 = ctypes.windll.user32
@@ -1550,18 +1493,17 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     user32.SetWindowPos(hwnd, 0, self.virtual_desktop_min_x, self.virtual_desktop_min_y,
                                         self.virtual_desktop_width, self.virtual_desktop_height,
                                         SWP_NOZORDER | SWP_NOACTIVATE)
-                    # 保留：Win32 API 需要同步到 Qt，这是必要的
                     QApplication.processEvents()
                     g3 = self.geometry()
-                    _debug_print(f"Win32后几何: pos=({g3.x()},{g3.y()}) size={g3.width()}x{g3.height()}")
+                    _debug_print(f"📺 [窗口设置] Win32后几何: pos=({g3.x()},{g3.y()}) size={g3.width()}x{g3.height()}")
                 except Exception as e:
-                    _debug_print(f"Win32 SetWindowPos 失败: {e}")
+                    _debug_print(f"❌ [窗口设置] Win32 SetWindowPos 失败: {e}")
         else:
-            # 关键修复5: 单显示器模式也要清除尺寸限制
+            # 单显示器模式
+            _debug_print(f"📺 [窗口设置] 使用全屏模式")
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
             self.showFullScreen()
-            _debug_print("单显示器模式：全屏显示")
         
         # 显示子控件
         self.mask.show()
