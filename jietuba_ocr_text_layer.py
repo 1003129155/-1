@@ -11,9 +11,9 @@ jietuba_ocr_text_layer.py - OCR 可交互文字层（钉图专用）
 使用：
 当钉图生成后，自动异步触发 OCR 识别并创建此透明文字层
 """
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtCore import Qt, QRect, QPoint, QRectF, pyqtSignal, QEvent
-from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QCursor, QFont, QFontMetrics
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import Qt, QRect, QPoint, QRectF, pyqtSignal, QEvent
+from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QCursor, QFont, QFontMetrics
 from typing import List, Dict, Optional, Tuple
 
 
@@ -112,11 +112,11 @@ class OCRTextLayer(QWidget):
     
     def __init__(self, parent=None, original_width: int = 100, original_height: int = 100):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # 默认透传鼠标，仅在文字区域/选择时拦截
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._event_filter_target = None
         parent_widget = parent if isinstance(parent, QWidget) else None
         if parent_widget:
@@ -197,8 +197,8 @@ class OCRTextLayer(QWidget):
         if not self._is_active():
             # 禁用时清除选择并透传
             self.clear_selection()
-            self.setCursor(Qt.ArrowCursor)
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             
             # ⚠️ 关键：禁用时移除事件过滤器，完全不拦截鼠标事件
             if self._event_filter_target:
@@ -213,7 +213,7 @@ class OCRTextLayer(QWidget):
                 return
                 
             # 有文字块时显示并配置
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.recalculate_char_positions()
             self.raise_()  # 提升到最上层
             self.show()
@@ -319,7 +319,7 @@ class OCRTextLayer(QWidget):
             return
         
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         scale_x, scale_y = self.get_scale_factors()
         
@@ -371,7 +371,7 @@ class OCRTextLayer(QWidget):
                 )
                 
                 # Windows 文本选择样式：蓝色背景
-                painter.setPen(Qt.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QBrush(QColor(0, 120, 215, 100)))
                 painter.drawRect(highlight_rect)
     
@@ -381,8 +381,8 @@ class OCRTextLayer(QWidget):
             # 如果不活跃（例如进入绘图模式），停止当前选择
             if self.is_selecting:
                 self.is_selecting = False
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self.setCursor(Qt.ArrowCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             return
         
         pos = event.pos()
@@ -404,8 +404,8 @@ class OCRTextLayer(QWidget):
         
         # 如果在按钮上，透传事件并使用普通光标
         if on_button:
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self.setCursor(Qt.ArrowCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             event.ignore()
             return
         
@@ -423,21 +423,21 @@ class OCRTextLayer(QWidget):
         # 动态切换鼠标事件透传模式
         if on_text:
             # 在文字上：拦截鼠标事件，显示文本光标
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-            self.setCursor(Qt.IBeamCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            self.setCursor(Qt.CursorShape.IBeamCursor)
             self._mouse_on_text = True
         else:
             # 不在文字上：透传鼠标事件给父窗口
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self.setCursor(Qt.ArrowCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             self._mouse_on_text = False
             event.ignore()
 
     def eventFilter(self, obj, event):
         """全局事件过滤：在透传模式下跟踪鼠标，只有文字/选择时拦截，空白允许拖动"""
         if not self._is_active():
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self.setCursor(Qt.ArrowCursor)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             return False
 
         et = event.type()
@@ -453,36 +453,36 @@ class OCRTextLayer(QWidget):
 
             # 拖拽选择过程中始终拦截
             if self.is_selecting:
-                self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+                self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 return False  # 让文字层自己的鼠标事件处理
 
             if et == QEvent.MouseMove:
                 if on_text:
-                    self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-                    self.setCursor(Qt.IBeamCursor)
+                    self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+                    self.setCursor(Qt.CursorShape.IBeamCursor)
                 else:
-                    self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                    self.setCursor(Qt.ArrowCursor)
+                    self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
 
             elif et == QEvent.MouseButtonPress:
                 if on_text:
                     # 让按下事件进入文字层用于选择
-                    self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+                    self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 else:
                     # 空白：直接透传；如果有选区，提前清空
                     if self.selection_start or self.selection_end:
                         self.clear_selection()
-                    self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                    self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
             elif et == QEvent.MouseButtonRelease:
                 if not self.is_selecting and not on_text:
-                    self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                    self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         return False  # 不拦截事件，让它继续传递
     
     def mousePressEvent(self, event):
         """鼠标按下事件 - Word 风格点击设置光标"""
-        if not self._is_active() or event.button() != Qt.LeftButton:
+        if not self._is_active() or event.button() != Qt.MouseButton.LeftButton:
             # 透传给父窗口
             event.ignore()
             return
@@ -546,16 +546,16 @@ class OCRTextLayer(QWidget):
                 # 有选择时，第一次点击空白清除选择
                 self.clear_selection()
                 # 让事件继续传递给父窗口用于拖动
-                self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 event.ignore()
             else:
                 # 没有选择时，透传给父窗口（允许拖动钉图）
-                self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 event.ignore()
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
-        if not self._is_active() or event.button() != Qt.LeftButton:
+        if not self._is_active() or event.button() != Qt.MouseButton.LeftButton:
             event.ignore()
             return
         
@@ -570,7 +570,7 @@ class OCRTextLayer(QWidget):
             event.ignore()
         # 释放后回到透传，避免阻塞其他操作
         if not self.is_selecting:
-            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
     
     def _get_char_at_pos(self, pos: QPoint) -> Tuple[Optional[int], Optional[int]]:
         """获取指定位置的字符索引，支持跨行拖拽：
@@ -687,17 +687,17 @@ class OCRTextLayer(QWidget):
             return
         
         # Ctrl+C: 复制
-        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_C:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_C:
             self._copy_selected_text()
         # Ctrl+A: 全选所有文字
-        elif event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_A:
+        elif event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_A:
             if self.text_items:
                 self.selection_start = (0, 0)
                 self.selection_end = (len(self.text_items) - 1, len(self.text_items[-1].text))
                 self.update()
                 print("📝 [OCR文字层] 全选所有文字")
         # Escape: 清除选择
-        elif event.key() == Qt.Key_Escape:
+        elif event.key() == Qt.Key.Key_Escape:
             # 始终放行 ESC，让钉图窗口接管（用于关闭）
             event.ignore()
             return

@@ -37,9 +37,9 @@ import io
 import builtins
 from ctypes import wintypes
 from datetime import datetime
-from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
-from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG
-from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
+from PyQt6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
+from PyQt6.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG
+from PyQt6.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
 from typing import Optional
 from PIL import Image
 
@@ -48,9 +48,9 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 from ctypes import wintypes
 from datetime import datetime
-from PyQt5.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
-from PyQt5.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG, QSettings
-from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
+from PyQt6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QApplication
+from PyQt6.QtCore import Qt, QRect, QTimer, pyqtSignal, QPoint, QMetaObject, Q_ARG, QSettings
+from PyQt6.QtGui import QPainter, QPen, QColor, QPixmap, QGuiApplication, QImage
 from PIL import Image
 import io
 
@@ -200,11 +200,11 @@ class FloatingToolbar(QWidget):
     def _setup_toolbar_window(self):
         """设置工具栏窗口属性"""
         self.setWindowFlags(
-            Qt.WindowStaysOnTopHint | 
-            Qt.FramelessWindowHint |
-            Qt.Tool
+            Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # 设置初始大小
         self.setFixedHeight(40)
@@ -239,7 +239,7 @@ class FloatingToolbar(QWidget):
             font-weight: bold;
             padding: 0 5px;
         """)
-        left_handle.setCursor(Qt.SizeHorCursor)
+        left_handle.setCursor(Qt.CursorShape.SizeHorCursor)
         left_handle.setToolTip("ドラッグして移動")
         toolbar_layout.addWidget(left_handle)
         self.left_handle = left_handle
@@ -280,7 +280,7 @@ class FloatingToolbar(QWidget):
             border-radius: 3px;
             background-color: rgba(255, 255, 255, 0.1);
         """)
-        self.count_label.setCursor(Qt.PointingHandCursor)
+        self.count_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.count_label.setToolTip("クリックして手動でスクリーンショット")
         self.count_label.mousePressEvent = lambda event: self._on_count_label_clicked(event)
         toolbar_layout.addWidget(self.count_label)
@@ -332,7 +332,7 @@ class FloatingToolbar(QWidget):
             font-weight: bold;
             padding: 0 5px;
         """)
-        right_handle.setCursor(Qt.SizeHorCursor)
+        right_handle.setCursor(Qt.CursorShape.SizeHorCursor)
         right_handle.setToolTip("ドラッグして移動")
         toolbar_layout.addWidget(right_handle)
         self.right_handle = right_handle
@@ -365,7 +365,7 @@ class FloatingToolbar(QWidget):
     
     def mousePressEvent(self, event):
         """鼠标按下事件 - 开始拖动或调整大小"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             # 检查是否点击在手柄上
             left_handle_rect = self.left_handle.geometry()
             right_handle_rect = self.right_handle.geometry()
@@ -376,7 +376,7 @@ class FloatingToolbar(QWidget):
                 # 点击在手柄上 - 开始拖动
                 self.dragging = True
                 self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
-                self.setCursor(Qt.ClosedHandCursor)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif pos.x() < 20:
                 # 点击在左边缘 - 左侧调整大小
                 self.resize_mode = 'left'
@@ -390,7 +390,7 @@ class FloatingToolbar(QWidget):
                 
     def mouseMoveEvent(self, event):
         """鼠标移动事件 - 执行拖动或调整大小"""
-        if event.buttons() == Qt.LeftButton:
+        if event.buttons() == Qt.MouseButton.LeftButton:
             if self.dragging:
                 # 拖动窗口
                 self.move(event.globalPos() - self.drag_position)
@@ -413,24 +413,24 @@ class FloatingToolbar(QWidget):
             # 更新鼠标光标
             pos = event.pos()
             if pos.x() < 20 or pos.x() > self.width() - 20:
-                self.setCursor(Qt.SizeHorCursor)
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
             else:
-                self.setCursor(Qt.ArrowCursor)
+                self.setCursor(Qt.CursorShape.ArrowCursor)
                 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件 - 结束拖动或调整大小"""
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
             self.resize_mode = None
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
 
 class PreviewPanel(QWidget):
     """实时预览面板，仅以透明背景展示拼接缩略图"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(210, 240)
         self._build_ui()
         self._set_placeholder()
@@ -441,7 +441,7 @@ class PreviewPanel(QWidget):
         layout.setSpacing(0)
 
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setFixedSize(self.width(), self.height())
         self.preview_label.setStyleSheet(
             "background: rgba(0, 0, 0, 0.25);"
@@ -453,7 +453,7 @@ class PreviewPanel(QWidget):
         )
         layout.addWidget(self.preview_label)
         self.warning_icon = QLabel("!", self.preview_label)
-        self.warning_icon.setAlignment(Qt.AlignCenter)
+        self.warning_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.warning_icon.setFixedSize(32, 32)
         self.warning_icon.setStyleSheet(
             "background: rgba(255, 255, 255, 0.9);"
@@ -681,13 +681,13 @@ class ScrollCaptureWindow(QWidget):
         """设置窗口属性"""
         # 设置窗口标志：无边框、置顶
         self.setWindowFlags(
-            Qt.WindowStaysOnTopHint | 
-            Qt.FramelessWindowHint |
-            Qt.Tool
+            Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool
         )
         
         # 设置窗口透明度和背景
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # 设置窗口位置和大小（基于截图区域）
         # 窗口区域 = 截图区域 + 底部按钮栏
@@ -1522,7 +1522,7 @@ class ScrollCaptureWindow(QWidget):
     def paintEvent(self, event):
         """绘制窗口边框"""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # 绘制半透明边框（在窗口边缘，不影响截图区域）
         pen = QPen(QColor(0, 120, 215), 3)  # 蓝色边框，3像素

@@ -20,10 +20,10 @@ jietuba_drawing.py - 统一绘画模块
 
 import math
 from typing import Optional
-from PyQt5.QtCore import Qt, QRect, QRectF, QPoint, QPointF
-from PyQt5.QtGui import (QPainter, QPen, QColor, QBrush, QPixmap, QFont, 
+from PyQt6.QtCore import Qt, QRect, QRectF, QPoint, QPointF
+from PyQt6.QtGui import (QPainter, QPen, QColor, QBrush, QPixmap, QFont, 
                          QPolygon, QFontMetrics)
-from PyQt5.QtWidgets import QLabel
+from PyQt6.QtWidgets import QLabel
 from jietuba_layer_system import StrokeStampRenderer
 
 
@@ -87,7 +87,7 @@ class UnifiedTextDrawer:
         try:
             painter = QPainter(pixmap)
             painter.setFont(QFont('', font_size))
-            painter.setPen(QPen(color, 3, Qt.SolidLine))
+            painter.setPen(QPen(color, 3, Qt.PenStyle.SolidLine))
 
             lines = text.split('\n')
             line_height = font_size * 2.0
@@ -147,7 +147,7 @@ class UnifiedTextDrawer:
                 parent.drawtext_pointlist.pop(0)
                 try:
                     pixmap_painter.setFont(QFont('', parent.tool_width))
-                    pixmap_painter.setPen(QPen(parent.pencolor, 3, Qt.SolidLine))
+                    pixmap_painter.setPen(QPen(parent.pencolor, 3, Qt.PenStyle.SolidLine))
                 except Exception as font_error:
                     print(f"统一文字绘制: 设置字体时出错: {font_error}")
                     return False
@@ -302,7 +302,7 @@ class UnifiedTextDrawer:
                 preedit_text = ''
             pos = anchor_point  # 仅取坐标，不弹出
             painter = QPainter(target_widget)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
             # 创建字体并设置给painter
             try:
@@ -311,7 +311,7 @@ class UnifiedTextDrawer:
                 font = QFont()
             font.setPointSize(max(1, parent.tool_width))
             painter.setFont(font)
-            base_pen = QPen(parent.pencolor, 3, Qt.SolidLine)
+            base_pen = QPen(parent.pencolor, 3, Qt.PenStyle.SolidLine)
             painter.setPen(base_pen)
             
             # 创建字体度量对象用于精确测量文字宽度（使用相同的字体）
@@ -373,7 +373,7 @@ class UnifiedTextDrawer:
                         highlight_width = _text_width_local(highlight)
                         underline_y = y + font_metrics.descent() + 2
                         highlight_pen = QPen(QColor(parent.pencolor).lighter(140), max(1, parent.tool_width // 6))
-                        highlight_pen.setStyle(Qt.DashLine)
+                        highlight_pen.setStyle(Qt.PenStyle.DashLine)
                         painter.setPen(highlight_pen)
                         painter.drawLine(int(base_x + prefix_width), int(underline_y),
                                          int(base_x + prefix_width + highlight_width), int(underline_y))
@@ -407,7 +407,7 @@ class MaskLayer(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
 
     def paintEvent(self, e):
@@ -416,14 +416,14 @@ class MaskLayer(QLabel):
             print('oninit return')
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # 正常显示选区
         rect = QRect(min(self.parent.x0, self.parent.x1), min(self.parent.y0, self.parent.y1),
                      abs(self.parent.x1 - self.parent.x0), abs(self.parent.y1 - self.parent.y0))
 
         # 绘制边框 - 加粗到4像素
-        painter.setPen(QPen(QColor(64, 224, 208), 4, Qt.SolidLine))
+        painter.setPen(QPen(QColor(64, 224, 208), 4, Qt.PenStyle.SolidLine))
         painter.drawRect(rect)
         painter.drawRect(0, 0, self.width(), self.height())
         
@@ -437,12 +437,12 @@ class MaskLayer(QLabel):
             y = self.parent.y0 + 15
         else:
             y = self.parent.y0 - 5
-        painter.setPen(QPen(QColor(32, 178, 170), 2, Qt.SolidLine))
+        painter.setPen(QPen(QColor(32, 178, 170), 2, Qt.PenStyle.SolidLine))
         painter.drawText(x, y,
                          '{}x{}'.format(abs(self.parent.x1 - self.parent.x0), abs(self.parent.y1 - self.parent.y0)))
 
         # 绘制阴影遮罩
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 120))
         painter.drawRect(0, 0, self.width(), min(self.parent.y1, self.parent.y0))
         painter.drawRect(0, min(self.parent.y1, self.parent.y0), min(self.parent.x1, self.parent.x0),
@@ -468,10 +468,10 @@ class MaskLayer(QLabel):
         ]
         
         for pos in handle_positions:
-            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.SolidLine))
+            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.PenStyle.SolidLine))
             painter.setBrush(QColor(48, 200, 192))
             painter.drawEllipse(pos, handle_size // 2 + 1, handle_size // 2 + 1)
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(48, 200, 192))
             painter.drawEllipse(pos, handle_size // 2, handle_size // 2)
         
@@ -495,17 +495,17 @@ class MaskLayer(QLabel):
             else:
                 enlarge_box_y = self.parent.mouse_posy + 20
             enlarge_rect = QRect(enlarge_box_x, enlarge_box_y, 120, 120)
-            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.SolidLine))
+            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.PenStyle.SolidLine))
             painter.drawRect(enlarge_rect)
             
             # 优化：绘制更美观的信息背景框
             info_box_height = 75  # 增加高度以容纳更大字体
             info_box_width = 150  # 增加宽度
-            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.SolidLine))  # 加边框
+            painter.setPen(QPen(QColor(64, 224, 208), 2, Qt.PenStyle.SolidLine))  # 加边框
             painter.setBrush(QBrush(QColor(40, 40, 45, 220)))  # 更深的背景，更高透明度
             painter.drawRoundedRect(QRect(enlarge_box_x, enlarge_box_y - info_box_height, 
                                          info_box_width, info_box_height), 5, 5)  # 圆角矩形
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
             # 安全获取像素颜色
             color = QColor(255, 255, 255)
@@ -533,15 +533,15 @@ class MaskLayer(QLabel):
             painter.setFont(font)
             
             # 使用渐变色文字效果
-            painter.setPen(QPen(QColor(100, 240, 220), 2, Qt.SolidLine))  # 青色文字
+            painter.setPen(QPen(QColor(100, 240, 220), 2, Qt.PenStyle.SolidLine))  # 青色文字
             painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 20,
                              'POS: ({}, {})'.format(self.parent.mouse_posx, self.parent.mouse_posy))
             
-            painter.setPen(QPen(QColor(255, 200, 100), 2, Qt.SolidLine))  # 橙黄色文字
+            painter.setPen(QPen(QColor(255, 200, 100), 2, Qt.PenStyle.SolidLine))  # 橙黄色文字
             painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 42,
                              'RGB: ({}, {}, {})'.format(RGB_color[0], RGB_color[1], RGB_color[2]))
             
-            painter.setPen(QPen(QColor(200, 150, 255), 2, Qt.SolidLine))  # 紫色文字
+            painter.setPen(QPen(QColor(200, 150, 255), 2, Qt.PenStyle.SolidLine))  # 紫色文字
             painter.drawText(enlarge_box_x + 8, enlarge_box_y - info_box_height + 64,
                              'HSV: ({}, {}, {})'.format(HSV_color[0], HSV_color[1], HSV_color[2]))
 
@@ -556,7 +556,7 @@ class MaskLayer(QLabel):
                     120 + self.parent.tool_width * 10, 120 + self.parent.tool_width * 10)
                 pix = larger_pix.copy(larger_pix.width() // 2 - 60, larger_pix.height() // 2 - 60, 120, 120)
                 painter.drawPixmap(enlarge_box_x, enlarge_box_y, pix)
-                painter.setPen(QPen(QColor(64, 224, 208), 1, Qt.SolidLine))
+                painter.setPen(QPen(QColor(64, 224, 208), 1, Qt.PenStyle.SolidLine))
                 painter.drawLine(enlarge_box_x, enlarge_box_y + 60, enlarge_box_x + 120, enlarge_box_y + 60)
                 painter.drawLine(enlarge_box_x + 60, enlarge_box_y, enlarge_box_x + 60, enlarge_box_y + 120)
             except:
@@ -574,7 +574,7 @@ class PaintLayer(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         self.px = self.py = -50
         self.pixPainter = None
@@ -666,7 +666,7 @@ class PaintLayer(QLabel):
                 brush_kind = "square" if is_highlight else "round"
                 pen_painter = self.pixPainter
                 if pen_painter:
-                    pen_painter.setRenderHint(QPainter.Antialiasing)
+                    pen_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
                 if self.parent.old_pen is None:
                     self.parent.old_pen = new_pen_point
@@ -730,7 +730,7 @@ class PaintLayer(QLabel):
         if not self.pixPainter.begin(pm):
             self.pixPainter = None
             return False
-        self.pixPainter.setRenderHint(QPainter.Antialiasing)
+        self.pixPainter.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._pixpainter_started_in_event = True
         return True
 
@@ -779,8 +779,8 @@ class PaintLayer(QLabel):
             mid_width = base_width * 0.9
             
             # 使用多个点绘制平滑渐变的箭杆
-            from PyQt5.QtGui import QPainterPath
-            from PyQt5.QtCore import QPointF
+            from PyQt6.QtGui import QPainterPath
+            from PyQt6.QtCore import QPointF
             
             path = QPainterPath()
             
@@ -809,7 +809,7 @@ class PaintLayer(QLabel):
             path.closeSubpath()
             
             # 绘制箭杆
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(color))
             painter.drawPath(path)
             
@@ -850,7 +850,7 @@ class PaintLayer(QLabel):
             painter.drawPath(arrow_path)
             
             # 恢复画笔设置
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             
         except Exception as e:
             print(f"绘制优化箭头错误: {e}")
@@ -880,7 +880,7 @@ class PaintLayer(QLabel):
             else:
                 width = self.parent.tool_width
             
-            painter.setPen(QPen(color, 1, Qt.SolidLine))
+            painter.setPen(QPen(color, 1, Qt.PenStyle.SolidLine))
             rect = QRectF(self.px - width / 2, self.py - width / 2, width, width)
             painter.drawEllipse(rect)
             painter.end()
@@ -900,7 +900,7 @@ class PaintLayer(QLabel):
                 if not self.pixPainter.begin(self.pixmap()):
                     print('QPainter begin failed')
                     return
-                self.pixPainter.setRenderHint(QPainter.Antialiasing)
+                self.pixPainter.setRenderHint(QPainter.RenderHint.Antialiasing)
             else:
                 print('pixmap invalid, skip painting')
                 return
@@ -914,7 +914,7 @@ class PaintLayer(QLabel):
             base_pixmap = self.parent.pixmap()
             if base_pixmap and not base_pixmap.isNull():
                 base_painter = QPainter(base_pixmap)
-                base_painter.setRenderHint(QPainter.Antialiasing)
+                base_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 base_painter.setCompositionMode(QPainter.CompositionMode_Multiply)
 
         # 画笔工具
@@ -931,7 +931,7 @@ class PaintLayer(QLabel):
             brush_kind = "square" if is_highlight else "round"
             pen_painter = base_painter if is_highlight and base_painter else self.pixPainter
             if pen_painter:
-                pen_painter.setRenderHint(QPainter.Antialiasing)
+                pen_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             if self.parent.old_pen is None:
                 self.parent.old_pen = new_pen_point
@@ -985,7 +985,7 @@ class PaintLayer(QLabel):
         if self.parent.drawrect_pointlist[0][0] != -2 and self.parent.drawrect_pointlist[1][0] != -2:
             try:
                 temppainter = QPainter(self)
-                temppainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.SolidLine))
+                temppainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.PenStyle.SolidLine))
                 poitlist = self.parent.drawrect_pointlist
                 temppainter.drawRect(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                      abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
@@ -995,7 +995,7 @@ class PaintLayer(QLabel):
                 
             if self.parent.drawrect_pointlist[2] == 1:
                 try:
-                    self.pixPainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.SolidLine))
+                    self.pixPainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.PenStyle.SolidLine))
                     self.pixPainter.drawRect(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                              abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
                     self.parent.drawrect_pointlist = [[-2, -2], [-2, -2], 0]
@@ -1024,7 +1024,7 @@ class PaintLayer(QLabel):
         if self.parent.drawcircle_pointlist[0][0] != -2 and self.parent.drawcircle_pointlist[1][0] != -2:
             try:
                 temppainter = QPainter(self)
-                temppainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.SolidLine))
+                temppainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.PenStyle.SolidLine))
                 poitlist = self.parent.drawcircle_pointlist
                 temppainter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                         abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
@@ -1034,7 +1034,7 @@ class PaintLayer(QLabel):
                 
             if self.parent.drawcircle_pointlist[2] == 1:
                 try:
-                    self.pixPainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.SolidLine))
+                    self.pixPainter.setPen(QPen(self.parent.pencolor, self.parent.tool_width, Qt.PenStyle.SolidLine))
                     self.pixPainter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
                                                 abs(poitlist[0][0] - poitlist[1][0]), abs(poitlist[0][1] - poitlist[1][1]))
                     
@@ -1116,11 +1116,11 @@ class PaintLayer(QLabel):
                     circle_radius = max(10, self.parent.tool_width * 1.5)
                     
                     # 绘制圆形背景（使用当前透明度设置）
-                    temppainter.setPen(Qt.NoPen)
+                    temppainter.setPen(Qt.PenStyle.NoPen)
                     bg_color = QColor(pen_color)
                     bg_color.setAlpha(self.parent.alpha)  # 使用透明度滑块的值
                     temppainter.setBrush(bg_color)
-                    from PyQt5.QtCore import QPointF
+                    from PyQt6.QtCore import QPointF
                     temppainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
                     
                     # 绘制数字
@@ -1152,11 +1152,11 @@ class PaintLayer(QLabel):
                         circle_radius = max(10, self.parent.tool_width * 1.5)
                         
                         # 绘制圆形背景（使用当前透明度设置）
-                        self.pixPainter.setPen(Qt.NoPen)
+                        self.pixPainter.setPen(Qt.PenStyle.NoPen)
                         bg_color = QColor(pen_color)
                         bg_color.setAlpha(self.parent.alpha)  # 使用透明度滑块的值
                         self.pixPainter.setBrush(bg_color)
-                        from PyQt5.QtCore import QPointF
+                        from PyQt6.QtCore import QPointF
                         self.pixPainter.drawEllipse(QPointF(center_x, center_y), circle_radius, circle_radius)
                         
                         # 绘制数字
@@ -1211,7 +1211,7 @@ class PaintLayer(QLabel):
                     pos = self.parent.drawtext_pointlist.pop(0)
                     if text and text.strip():
                         self.pixPainter.setFont(QFont('', self.parent.tool_width))
-                        self.pixPainter.setPen(QPen(self.parent.pencolor, 3, Qt.SolidLine))
+                        self.pixPainter.setPen(QPen(self.parent.pencolor, 3, Qt.PenStyle.SolidLine))
                         lines = text.split('\n')
                         line_height = self.parent.tool_width * 2.0
                         base_x = pos[0] + self.parent.text_box.document.size().height() / 8 - 3
@@ -1288,11 +1288,11 @@ class PaintLayer(QLabel):
                 if pixmap and not pixmap.isNull():
                     try:
                         overlay = QPainter(self)
-                        overlay.setRenderHint(QPainter.Antialiasing)
+                        overlay.setRenderHint(QPainter.RenderHint.Antialiasing)
                         overlay.drawPixmap(rect.topLeft(), pixmap)
-                        pen = QPen(QColor(0, 120, 215), 1, Qt.DashLine)
+                        pen = QPen(QColor(0, 120, 215), 1, Qt.PenStyle.DashLine)
                         overlay.setPen(pen)
-                        overlay.setBrush(Qt.NoBrush)
+                        overlay.setBrush(Qt.BrushStyle.NoBrush)
                         overlay.drawRect(rect)
 
                         handle_size = 6
@@ -1330,12 +1330,12 @@ class PaintLayer(QLabel):
                         # 我们只需要确保绘制坐标系正确
                         
                         painter = QPainter(self)
-                        painter.setRenderHint(QPainter.Antialiasing)
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                         
                         # 绘制橙色虚线框
-                        pen = QPen(QColor(255, 165, 0), 2, Qt.DashLine)
+                        pen = QPen(QColor(255, 165, 0), 2, Qt.PenStyle.DashLine)
                         painter.setPen(pen)
-                        painter.setBrush(Qt.NoBrush)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
                         painter.drawRect(rect_norm)
                         
                         # 绘制手柄
@@ -1356,7 +1356,7 @@ class PaintLayer(QLabel):
                             QRectF(rect.right()-handle_size/2, rect.bottom()-handle_size/2, handle_size, handle_size),
                         ]
                         
-                        painter.setPen(QPen(QColor(255, 165, 0), 1, Qt.SolidLine))
+                        painter.setPen(QPen(QColor(255, 165, 0), 1, Qt.PenStyle.SolidLine))
                         painter.setBrush(QBrush(QColor(255, 255, 255)))
                         for handle in handles:
                             painter.drawRect(handle)
@@ -1379,7 +1379,7 @@ class PaintLayer(QLabel):
                 self.pixPainter = None
             
             empty_pix = QPixmap(1, 1)
-            empty_pix.fill(Qt.transparent)
+            empty_pix.fill(Qt.GlobalColor.transparent)
             self.setPixmap(empty_pix)
             self.parent = None
             print("🧹 [内存清理] PaintLayer清理完成")

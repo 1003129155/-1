@@ -1,14 +1,14 @@
 import sys
 import os
 import platform
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QStackedWidget, QWidget,
     QFrame, QSpinBox, QDoubleSpinBox, QGridLayout, QScrollArea,
     QLineEdit, QComboBox, QFileDialog, QMessageBox, QApplication
 )
-from PyQt5.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt5.QtGui import QColor, QPainter, QFont, QPen
+from PyQt6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt6.QtGui import QColor, QPainter, QFont, QPen
 
 # ==========================================
 # 1. UI 组件库 (仿微信/iOS 风格)
@@ -19,7 +19,7 @@ class ToggleSwitch(QWidget):
     def __init__(self, parent=None, width=44, height=24, bg_color="#E5E5E5", active_color="#07C160"):
         super().__init__(parent)
         self.setFixedSize(width, height)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._bg_color = bg_color
         self._circle_color = "#FFFFFF"
         self._active_color = active_color
@@ -40,12 +40,12 @@ class ToggleSwitch(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # 绘制背景
         color = self._active_color if self._checked else self._bg_color
         painter.setBrush(QColor(color))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         rect = self.rect()
         painter.drawRoundedRect(0, 0, rect.width(), rect.height(), rect.height() / 2, rect.height() / 2)
 
@@ -97,7 +97,7 @@ class HLine(QFrame):
     def __init__(self):
         super().__init__()
         self.setFrameShape(QFrame.HLine)
-        self.setFrameShadow(QFrame.Sunken)
+        self.setFrameShadow(QFrame.Shadow.Sunken)
         self.setStyleSheet("background-color: #F0F0F0; border: none; max-height: 1px;")
 
 # ==========================================
@@ -178,7 +178,7 @@ class SettingsDialog(QDialog):
         """创建左侧导航栏 - 灰色极简风格"""
         nav_list = QListWidget()
         nav_list.setFixedWidth(180)
-        nav_list.setFocusPolicy(Qt.NoFocus)
+        nav_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         nav_list.setStyleSheet("""
             QListWidget {
                 background-color: #F0F0F0;
@@ -487,7 +487,7 @@ class SettingsDialog(QDialog):
         current_dir = self.config_manager.get_screenshot_save_path()
         self.save_path_lbl = QLabel(current_dir)
         self.save_path_lbl.setStyleSheet("color: #576B95; background-color: transparent;")  # 仿链接色
-        self.save_path_lbl.setCursor(Qt.PointingHandCursor)
+        self.save_path_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_path_lbl.setWordWrap(True)
         
         lbl_title = QLabel("保存フォルダ:")
@@ -715,7 +715,7 @@ class SettingsDialog(QDialog):
         current_dir = self.config_manager.get_log_dir()
         self.path_lbl = QLabel(current_dir)
         self.path_lbl.setStyleSheet("color: #576B95; background-color: transparent;")  # 仿链接色
-        self.path_lbl.setCursor(Qt.PointingHandCursor)  # 设置鼠标指针
+        self.path_lbl.setCursor(Qt.CursorShape.PointingHandCursor)  # 设置鼠标指针
         self.path_lbl.setWordWrap(True)
         
         lbl_title = QLabel("保存場所:")
@@ -807,7 +807,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(15)
         
         reset_btn = QPushButton("このページをリセット")
-        reset_btn.setCursor(Qt.PointingHandCursor)
+        reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         reset_btn.setStyleSheet("""
             QPushButton { color: #FA5151; background: transparent; border: none; font-size: 13px; }
             QPushButton:hover { color: #D00000; }
@@ -816,7 +816,7 @@ class SettingsDialog(QDialog):
         
         cancel_btn = QPushButton("キャンセル")
         cancel_btn.setFixedSize(100, 32)
-        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.setStyleSheet("""
             QPushButton { background-color: #E5E5E5; border-radius: 4px; border: none; color: #333; }
             QPushButton:hover { background-color: #D6D6D6; }
@@ -825,7 +825,7 @@ class SettingsDialog(QDialog):
         
         ok_btn = QPushButton("適用")
         ok_btn.setFixedSize(100, 32)
-        ok_btn.setCursor(Qt.PointingHandCursor)
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         ok_btn.setStyleSheet("""
             QPushButton { background-color: #07C160; border-radius: 4px; border: none; color: #FFF; font-weight: bold; }
             QPushButton:hover { background-color: #06AD56; }
@@ -1007,7 +1007,7 @@ class SettingsDialog(QDialog):
 # 3. 用于测试的 Mock 类 (当你集成时请删除这部分)
 # ==========================================
 if __name__ == "__main__":
-    from PyQt5.QtCore import QSettings
+    from PyQt6.QtCore import QSettings
     
     class MockConfig:
         def __init__(self):
@@ -1037,7 +1037,7 @@ if __name__ == "__main__":
     
     dlg = SettingsDialog(MockConfig())
     dlg.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
     if __name__ == "__main__":
         app = QApplication(sys.argv)
         font = QFont("Microsoft YaHei", 9)
@@ -1045,4 +1045,4 @@ if __name__ == "__main__":
         
         dlg = SettingsDialog(MockConfig())
         dlg.show()
-        sys.exit(app.exec_())
+        sys.exit(app.exec())

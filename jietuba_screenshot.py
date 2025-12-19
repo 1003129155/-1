@@ -21,11 +21,11 @@ import sys
 import time
 import ctypes
 from ctypes import wintypes
-from PyQt5.QtCore import QPoint, QPointF, QRectF, QMimeData, QSize, QBuffer, QIODevice
-from PyQt5.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
-from PyQt5.QtGui import QCursor, QBrush, QScreen, QWindow, QTransform
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QIcon, QFont, QImage, QColor, QPolygon
-from PyQt5.QtWidgets import *  # 包含 QFrame 以支持透明输入框无边框设置
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QMimeData, QSize, QBuffer, QIODevice
+from PyQt6.QtCore import QRect, Qt, pyqtSignal, QTimer, QSettings, QUrl, QStandardPaths
+from PyQt6.QtGui import QCursor, QBrush, QScreen, QWindow, QTransform
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QIcon, QFont, QImage, QColor, QPolygon
+from PyQt6.QtWidgets import *  # 包含 QFrame 以支持透明输入框无边框设置
 from jietuba_widgets import Freezer
 from jietuba_layer_system import VectorLayerDocument
 
@@ -57,6 +57,86 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     screen_shot_end_show_sinal = pyqtSignal(QPixmap)
     set_area_result_signal = pyqtSignal(list)
     getpix_result_signal = pyqtSignal(tuple,QPixmap)
+    
+    # ==================== 🎯 选区坐标属性代理 ====================
+    # 将旧的self.x0/y0/x1/y1字段代理到adapter.document
+    # 保持API完全兼容,同时使用Document-View-Command架构管理数据
+    
+    @property
+    def x0(self):
+        """选区左上角X坐标 - 代理到adapter"""
+        if hasattr(self, 'adapter') and self.adapter:
+            return self.adapter.get_selection()[0]
+        return -50  # 初始化前返回默认值
+    
+    @x0.setter
+    def x0(self, value):
+        if hasattr(self, 'adapter') and self.adapter:
+            _, y0, x1, y1 = self.adapter.get_selection()
+            self.adapter.set_selection(value, y0, x1, y1)
+    
+    @property
+    def y0(self):
+        """选区左上角Y坐标 - 代理到adapter"""
+        if hasattr(self, 'adapter') and self.adapter:
+            return self.adapter.get_selection()[1]
+        return -50
+    
+    @y0.setter
+    def y0(self, value):
+        if hasattr(self, 'adapter') and self.adapter:
+            x0, _, x1, y1 = self.adapter.get_selection()
+            self.adapter.set_selection(x0, value, x1, y1)
+    
+    @property
+    def x1(self):
+        """选区右下角X坐标 - 代理到adapter"""
+        if hasattr(self, 'adapter') and self.adapter:
+            return self.adapter.get_selection()[2]
+        return -50
+    
+    @x1.setter
+    def x1(self, value):
+        if hasattr(self, 'adapter') and self.adapter:
+            x0, y0, _, y1 = self.adapter.get_selection()
+            self.adapter.set_selection(x0, y0, value, y1)
+    
+    @property
+    def y1(self):
+        """选区右下角Y坐标 - 代理到adapter"""
+        if hasattr(self, 'adapter') and self.adapter:
+            return self.adapter.get_selection()[3]
+        return -50
+    
+    @y1.setter
+    def y1(self, value):
+        if hasattr(self, 'adapter') and self.adapter:
+            x0, y0, x1, _ = self.adapter.get_selection()
+            self.adapter.set_selection(x0, y0, x1, value)
+    
+    # rx0, ry0 临时选区坐标 (用于拖拽边框调整大小)
+    @property
+    def rx0(self):
+        if hasattr(self, '_rx0'):
+            return self._rx0
+        return -50
+    
+    @rx0.setter
+    def rx0(self, value):
+        self._rx0 = value
+    
+    @property
+    def ry0(self):
+        if hasattr(self, '_ry0'):
+            return self._ry0
+        return -50
+    
+    @ry0.setter
+    def ry0(self, value):
+        self._ry0 = value
+    
+    # ==================== 原有代码 ====================
+    
     def __init__(self, parent=None):
         super().__init__()
         # self.ready_flag = False
@@ -104,15 +184,15 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         # 优化：预先设置窗口属性，避免后续闪烁
         if PLATFORM_SYS == "darwin":
-            self.setWindowFlags(Qt.FramelessWindowHint)
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         else:
-            self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)  # Sheet
+            self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)  # Sheet
         
         # 预先隐藏窗口，避免显示过程中的跳动
         # 优化：删除此处的 processEvents()，在 screen_shot() 开始时统一刷新
         self.hide()
         self.setWindowOpacity(0)  # 先设为透明
-        # self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.botton_box = QGroupBox(self)  # botton_box是截屏选框旁边那个按钮堆的box
         self.save_botton = QPushButton(QIcon(":/saveicon.png"), '', self.botton_box)
         self.save_botton.clicked.connect(self.handle_save_button_click)
@@ -120,7 +200,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         self.sure_btn = QPushButton("確定", self.botton_box)
         self.freeze_img_botton = QPushButton(self.botton_box)
         self.long_screenshot_btn = QPushButton(self.botton_box)  # 长截图按钮
-        self.pencolor = QColor(Qt.red)
+        self.pencolor = QColor(Qt.GlobalColor.red)
         
         # 创建二级菜单容器 - 用于显示绘画工具的调节控件
         self.paint_tools_menu = QWidget(self)
@@ -129,8 +209,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         # 将调节控件移到二级菜单中
         self.choice_clor_btn = HoverButton('', self.paint_tools_menu)  # 移动到二级菜单
-        self.size_slider = QSlider(Qt.Horizontal, self.paint_tools_menu)
-        self.alpha_slider = QSlider(Qt.Horizontal, self.paint_tools_menu)
+        self.size_slider = QSlider(Qt.Orientation.Horizontal, self.paint_tools_menu)
+        self.alpha_slider = QSlider(Qt.Orientation.Horizontal, self.paint_tools_menu)
         self.sizetextlabel = QLabel(self.paint_tools_menu)
         self.alphatextlabel = QLabel(self.paint_tools_menu)
         self.size_slider_label = QLabel(self.paint_tools_menu)
@@ -196,7 +276,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     def init_parameters(self):  # 初始化参数
         self.NpainterNmoveFlag = self.choicing = self.move_rect = self.move_y0 = self.move_x0 = self.move_x1 \
             = self.change_alpha = self.move_y1 = False
-        self.x0 = self.y0 = self.rx0 = self.ry0 = self.x1 = self.y1 = -50
+        # 🔄 选区坐标由property代理管理,不需要手动初始化
+        # self.x0 = self.y0 = self.rx0 = self.ry0 = self.x1 = self.y1 = -50  # 已废弃
         # 鼠标位置初始化为屏幕外位置，避免默认放大镜显示（鼠标移动后会自动更新到正确位置）
         self.mouse_posx = self.mouse_posy = -100
         self.bx = self.by = 0
@@ -292,7 +373,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 w, h = self._paintlayer_size
                 print(f"🎨 延迟初始化paintlayer: {w}x{h}")
                 pixmap = QPixmap(w, h)
-                pixmap.fill(Qt.transparent)
+                pixmap.fill(Qt.GlobalColor.transparent)
                 self.paintlayer.setPixmap(pixmap)
                 self._paintlayer_initialized = True
                 return True
@@ -649,12 +730,12 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
             if self._choice_color_base_icon.isNull():
                 pixmap = QPixmap(icon_size)
-                pixmap.fill(Qt.transparent)
+                pixmap.fill(Qt.GlobalColor.transparent)
             else:
                 pixmap = self._choice_color_base_icon.pixmap(icon_size)
 
             painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             color = QColor(self.pencolor)
 
             indicator_d = max(10, int(min(icon_size.width(), icon_size.height()) * 0.4))
@@ -665,11 +746,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 indicator_d,
             )
 
-            painter.setPen(QPen(Qt.white, 1.5))
+            painter.setPen(QPen(Qt.GlobalColor.white, 1.5))
             painter.setBrush(color)
             painter.drawEllipse(indicator_rect)
 
-            painter.setPen(QPen(Qt.black, 0.5))
+            painter.setPen(QPen(Qt.GlobalColor.black, 0.5))
             painter.drawEllipse(indicator_rect.adjusted(0, 0, -1, -1))
             painter.end()
 
@@ -747,7 +828,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                                 paint_pixmap = self.current_pinned_window.paintlayer.pixmap()
                                 if paint_pixmap:
                                     painter = QPainter(paint_pixmap)
-                                    painter.setRenderHint(QPainter.Antialiasing)
+                                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                                     success = UnifiedTextDrawer.process_text_drawing(
                                         self,
                                         painter,
@@ -769,7 +850,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                                 paint_pixmap = self.paintlayer.pixmap()
                                 if paint_pixmap:
                                     painter = QPainter(paint_pixmap)
-                                    painter.setRenderHint(QPainter.Antialiasing)
+                                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                                     success = UnifiedTextDrawer.process_text_drawing(
                                         self,
                                         painter,
@@ -812,7 +893,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 try:
                     self.text_box.setParent(self)
                     self.text_box.setWindowFlags(Qt.Widget)
-                    self.text_box.setAttribute(Qt.WA_TranslucentBackground, False)
+                    self.text_box.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
                 except Exception as e:
                     print(f"重置窗口属性时出错: {e}")
                 
@@ -857,11 +938,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 cursor_pixmap = QPixmap(":/numbericon.png")
                 if cursor_pixmap.isNull():
                     # 如果图标不存在，使用默认十字光标
-                    self.setCursor(Qt.CrossCursor)
+                    self.setCursor(Qt.CursorShape.CrossCursor)
                 else:
                     self.setCursor(QCursor(cursor_pixmap.scaled(32, 32, Qt.KeepAspectRatio), 16, 16))
             except:
-                self.setCursor(Qt.CrossCursor)
+                self.setCursor(Qt.CursorShape.CrossCursor)
             # 激活绘画工具时确保工具栏可见
             if hasattr(self, 'botton_box'):
                 self.botton_box.show()
@@ -1291,7 +1372,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if mousepos[0]in range(rect[0],rect[0]+rect[2]) and mousepos[1]in range(rect[1],rect[1]+rect[3]):
                 secondscreen = i
                 break
-        print("t", self.x(), QApplication.desktop().width(),QApplication.primaryScreen().geometry(),secondscreen.geometry(),mousepos)
+        print("t", self.x(), QApplication.primaryScreen().geometry().width(),QApplication.primaryScreen().geometry(),secondscreen.geometry(),mousepos)
         return secondscreen
     
     def get_screen_for_point(self, x, y):
@@ -1354,7 +1435,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             
             # 使用 Format_ARGB32 因为它的内存布局在小端系统上是 BGRA（与mss一致）
             # 这样可以避免手动转换通道，零拷贝创建 QImage
-            qimage = QImage(screenshot.bgra, width, height, bytes_per_line, QImage.Format_ARGB32)
+            qimage = QImage(screenshot.bgra, width, height, bytes_per_line, QImage.Format.Format_ARGB32)
             
             # 转换为 QPixmap（这里会拷贝一次，但这是必要的）
             combined = QPixmap.fromImage(qimage)
@@ -1416,6 +1497,13 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             get_pix = self.capture_all_screens()
             # get_pix.setDevicePixelRatio(pixRat)  # 注释掉这行，避免DPI缩放
             
+        # 🎯 初始化适配器 - Document-View-Command架构
+        # 将截图背景转换为QImage并初始化适配器
+        bg_image = get_pix.toImage()
+        from canvas.slabel_adapter import SLabelAdapter
+        self.adapter = SLabelAdapter(bg_image)
+        _debug_print(f"✅ [适配器] SLabelAdapter已初始化 - 背景尺寸: {bg_image.width()}x{bg_image.height()}")
+            
         # 优化: 直接使用get_pix，避免不必要的复制。QPixmap是隐式共享的，只在修改时才真正复制
         # 移除了中间变量pixmap，节省一份完整屏幕图像的内存
         self.originalPix = get_pix
@@ -1424,7 +1512,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         # 关键修复3: 确保QLabel图像显示属性正确，避免DPI缩放和自动缩放
         self.setScaledContents(False)  # 禁用自动缩放，保持原始尺寸1:1显示
-        self.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 确保图像从左上角开始显示
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)  # 确保图像从左上角开始显示
         
         self.setPixmap(get_pix)
         self.mask.setGeometry(0, 0, get_pix.width(), get_pix.height())
@@ -1573,7 +1661,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         print('sstime:', time.process_time() - t1)
         
         # 立即设置十字光标，
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
         
         self.setFocus()
         self.setMouseTracking(True)
@@ -1727,7 +1815,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # 优化：如果矢量文档为空，直接创建透明层
             if not doc.commands:
                 empty = QPixmap(target_w, target_h)
-                empty.fill(Qt.transparent)
+                empty.fill(Qt.GlobalColor.transparent)
                 self.paintlayer.setPixmap(empty)
                 self.paintlayer.update()
                 print(f"✅ 撤销系统: paintlayer 已清空 (矢量为空, {target_w}x{target_h})")
@@ -1742,7 +1830,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             
             # paintlayer 设置为透明（因为所有内容已经合成到底图上了）
             empty = QPixmap(target_w, target_h)
-            empty.fill(Qt.transparent)
+            empty.fill(Qt.GlobalColor.transparent)
             self.paintlayer.setPixmap(empty)
             self.paintlayer.update()
             
@@ -1794,6 +1882,42 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         return None
 
     def backup_shortshot(self):
+        """保存当前状态到撤销栈 - 使用adapter的QUndoStack"""
+        # 检查是否在钉图模式下
+        if hasattr(self, 'mode') and self.mode == "pinned":
+            # 钉图模式下使用旧的备份系统(暂不迁移)
+            self._backup_shortshot_legacy()
+            return
+        
+        # 防止在撤销操作过程中进行备份
+        if hasattr(self, '_in_undo_operation') and self._in_undo_operation:
+            _debug_print("🔄 [撤销系统] 跳过备份 - 正在进行撤销操作")
+            return
+        
+        # 防止在钉图创建过程中进行意外备份
+        if hasattr(self, '_creating_pinned_window') and self._creating_pinned_window:
+            _debug_print("🔄 [撤销系统] 跳过备份 - 正在创建钉图窗口")
+            return
+        
+        # 使用adapter的撤销栈
+        if hasattr(self, 'adapter') and self.adapter:
+            try:
+                # 捕获当前状态
+                snapshot = self._capture_backup_snapshot()
+                if snapshot:
+                    self.adapter.record_state(snapshot)
+                    _debug_print(f"✅ [撤销系统] 状态已保存到adapter - 可撤销步数: {self.adapter.undo_stack.count()}")
+                else:
+                    _debug_print("⚠️ [撤销系统] 快照创建失败")
+            except Exception as e:
+                print(f"❌ [撤销系统] 保存状态失败: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            _debug_print("⚠️ [撤销系统] adapter未初始化")
+    
+    def _backup_shortshot_legacy(self):
+        """旧的备份系统 - 用于钉图模式"""
         # 防止在撤销操作过程中进行备份
         if hasattr(self, '_in_undo_operation') and self._in_undo_operation:
             print("撤销系统: 跳过备份 - 正在进行撤销操作")
@@ -1839,6 +1963,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.backup_ssid = len(self.backup_pic_list) - 1
 
     def last_step(self):
+        """撤销上一步操作 - 使用adapter的QUndoStack"""
         try:
             # 检查是否在钉图模式下
             if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
@@ -1846,54 +1971,74 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 if hasattr(self.current_pinned_window, 'last_step'):
                     self.current_pinned_window.last_step()
                 else:
-                    print("⚠️ 钉图窗口没有撤销方法")
+                    _debug_print("⚠️ 钉图窗口没有撤销方法")
                 return
             
-            # 设置撤销操作标志，防止在撤销过程中进行备份
-            self._in_undo_operation = True
-            
-            # 检查是否有有效的备份可以撤销
-            # backup_ssid > 0 表示当前不在初始状态
-            # len(self.backup_pic_list) > 1 表示确实有多个备份状态
-            if self.backup_ssid > 0 and len(self.backup_pic_list) > 1:
-                # 移除了上一步提示
-                self.backup_ssid -= 1
-                self.return_shortshot()
-                print(f"撤销调试: 撤销到步骤 {self.backup_ssid}")
+            # 使用adapter的撤销栈
+            if hasattr(self, 'adapter') and self.adapter:
+                # 设置撤销操作标志,防止在撤销过程中进行备份
+                self._in_undo_operation = True
+                
+                if self.adapter.can_undo():
+                    # 执行撤销
+                    self.adapter.undo()
+                    
+                    # 获取撤销后的状态并应用
+                    state = self.adapter.get_current_state()
+                    if state:
+                        self._apply_backup_snapshot(state)
+                        self.update()
+                        _debug_print(f"✅ [撤销] 撤销成功 - 剩余可撤销步数: {self.adapter.undo_stack.count()}")
+                    else:
+                        _debug_print("⚠️ [撤销] 获取状态失败")
+                else:
+                    _debug_print("ℹ️ [撤销] 已经是第一步,不能再撤销")
             else:
-                # 移除了没有上一步了提示
-                print(f"撤销调试: 已经是第一步，不能再撤销 (backup_ssid={self.backup_ssid}, list_length={len(self.backup_pic_list) if hasattr(self, 'backup_pic_list') else 0})")
+                _debug_print("⚠️ [撤销] adapter未初始化")
+                
         except Exception as e:
-            print(f"⚠️ 撤销操作出错: {e}")
-            # 移除了撤销失败提示
-            # 重置撤销状态防止进一步错误
-            try:
-                if hasattr(self, 'backup_pic_list') and len(self.backup_pic_list) > 0:
-                    self.backup_ssid = min(self.backup_ssid, len(self.backup_pic_list) - 1)
-                    self.backup_ssid = max(0, self.backup_ssid)
-            except:
-                self.backup_ssid = 0
+            print(f"❌ [撤销] 操作出错: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # 清除撤销操作标志
             self._in_undo_operation = False
 
     def next_step(self):
-        # 检查是否在钉图模式下
-        if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
-            # 钉图模式下，调用钉图窗口的前进方法
-            if hasattr(self.current_pinned_window, 'next_step'):
-                self.current_pinned_window.next_step()
+        """重做下一步操作 - 使用adapter的QUndoStack"""
+        try:
+            # 检查是否在钉图模式下
+            if hasattr(self, 'mode') and self.mode == "pinned" and hasattr(self, 'current_pinned_window'):
+                # 钉图模式下，调用钉图窗口的前进方法
+                if hasattr(self.current_pinned_window, 'next_step'):
+                    self.current_pinned_window.next_step()
+                else:
+                    _debug_print("⚠️ 钉图窗口没有前进方法")
+                return
+            
+            # 使用adapter的撤销栈
+            if hasattr(self, 'adapter') and self.adapter:
+                if self.adapter.can_redo():
+                    # 执行重做
+                    self.adapter.redo()
+                    
+                    # 获取重做后的状态并应用
+                    state = self.adapter.get_current_state()
+                    if state:
+                        self._apply_backup_snapshot(state)
+                        self.update()
+                        _debug_print(f"✅ [重做] 重做成功 - 剩余可重做步数: {self.adapter.undo_stack.count() - self.adapter.undo_stack.index()}")
+                    else:
+                        _debug_print("⚠️ [重做] 获取状态失败")
+                else:
+                    _debug_print("ℹ️ [重做] 已经是最新步骤,不能再重做")
             else:
-                print("⚠️ 钉图窗口没有前进方法")
-            return
-        
-        if self.backup_ssid < len(self.backup_pic_list) - 1:
-            # 移除了下一步提示
-            self.backup_ssid += 1
-            self.return_shortshot()
-        else:
-            # 移除了没有下一步了提示
-            print("重做调试: 已经是最新步骤，不能再重做")
+                _debug_print("⚠️ [重做] adapter未初始化")
+                
+        except Exception as e:
+            print(f"❌ [重做] 操作出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     def return_shortshot(self):
         """
@@ -1967,7 +2112,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     print(f"🔧 [长截图] 坐标转换: 虚拟({min(x0, x1)}, {min(y0, y1)}) -> 真实({real_x0}, {real_y0})")
                 
                 # 创建选区矩形（使用真实坐标）
-                from PyQt5.QtCore import QRect
+                from PyQt6.QtCore import QRect
                 capture_rect = QRect(real_x0, real_y0, real_width, real_height)
                 
                 print(f"📐 选中区域（真实坐标）: {capture_rect}")
@@ -1980,8 +2125,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 # 导入必要的模块
                 from jietuba_scroll import ScrollCaptureWindow
                 from jietuba_stitch import stitch_images_vertical
-                from PyQt5.QtWidgets import QApplication, QMessageBox
-                from PyQt5.QtGui import QImage
+                from PyQt6.QtWidgets import QApplication, QMessageBox
+                from PyQt6.QtGui import QImage
                 
                 # 隐藏当前截图窗口
                 self.hide()
@@ -2006,7 +2151,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 return
         
         # 如果没有有效选区，显示提示
-        from PyQt5.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(None, "警告", "请先选择一个有效的截图区域！")
     
     def _on_long_screenshot_finished(self):
@@ -2015,8 +2160,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         
         try:
             from jietuba_stitch import stitch_images_vertical
-            from PyQt5.QtWidgets import QApplication, QMessageBox
-            from PyQt5.QtGui import QImage, QPixmap
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            from PyQt6.QtGui import QImage, QPixmap
             
             # 🆕 直接获取实时拼接的结果图
             result_image = self.scroll_capture_window.get_stitched_result()
@@ -2035,7 +2180,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     result_image.width,
                     result_image.height,
                     result_image.width * 3,
-                    QImage.Format_RGB888
+                    QImage.Format.Format_RGB888
                 )
             elif result_image.mode == 'RGBA':
                 qimage = QImage(
@@ -2052,7 +2197,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     result_image.width,
                     result_image.height,
                     result_image.width * 3,
-                    QImage.Format_RGB888
+                    QImage.Format.Format_RGB888
                 )
             
             # 转换为QPixmap
@@ -2097,7 +2242,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             import traceback
             traceback.print_exc()
             
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 None,
                 "エラー",
@@ -2161,7 +2306,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         paint_pixmap = self.paintlayer.pixmap()
                         if paint_pixmap:
                             painter = QPainter(paint_pixmap)
-                            painter.setRenderHint(QPainter.Antialiasing)
+                            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                             
                             # 执行文字绘制
                             success = UnifiedTextDrawer.process_text_drawing(
@@ -2346,10 +2491,10 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 if has_paint_content:
                     # 有绘画内容，需要合并后保存
                     merged_img = QPixmap(self.final_get_img.size())
-                    merged_img.fill(Qt.transparent)
+                    merged_img.fill(Qt.GlobalColor.transparent)
                     
                     painter = QPainter(merged_img)
-                    painter.setRenderHint(QPainter.Antialiasing)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                     # 先绘制原图
                     painter.drawPixmap(0, 0, self.final_get_img)
                     # 再绘制绘画层（通过矢量文档渲染）
@@ -2558,7 +2703,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             return fallback
             
             painter = QPainter(composite_pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
             # 1. 绘制基础图像
             painter.drawPixmap(0, 0, base_image)
@@ -2641,7 +2786,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         pix = self.pixmap().copy()
         paintlayer = self.paintlayer.pixmap()
         painter = QPainter(pix)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if paintlayer:  # 添加安全检查
             painter.drawPixmap(0, 0, paintlayer)
         painter.end()  # 一定要end
@@ -2757,7 +2902,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     # 已绘制文字区域二次编辑功能已移除
 
     def mouseDoubleClickEvent(self, e):  # 双击
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             print("左键双击")
 
     # 鼠标点击事件
@@ -2974,7 +3119,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             else:
                 print("主窗口鼠标按下调试: 收到钉图窗口委托事件")
 
-        if event.button() == Qt.LeftButton:  # 按下了左键
+        if event.button() == Qt.MouseButton.LeftButton:  # 按下了左键
             # ------------------------------------------------------------------
             # 0. 优先处理：旋转与缩放手柄
             # ------------------------------------------------------------------
@@ -2994,7 +3139,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # ------------------------------------------------------------------
             # 1. 优先处理：对象选择与移动 (Ctrl键 或 刚画完选中)
             # ------------------------------------------------------------------
-            is_ctrl_pressed = (event.modifiers() & Qt.ControlModifier)
+            is_ctrl_pressed = (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             
             # 尝试命中测试
             hit_index = -1
@@ -3126,7 +3271,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         self.text_box.setParent(self.current_pinned_window)  # 设置为钉图窗口的子控件
                         # 子控件不需要特殊的WindowFlags，只需要默认即可，或者保持Widget
                         self.text_box.setWindowFlags(Qt.Widget)
-                        self.text_box.setAttribute(Qt.WA_TranslucentBackground, True)
+                        self.text_box.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
                         
                         # 关键修复：确保文字颜色可见，背景透明
                         # 不要使用透明文字颜色，应该显示为正常颜色供用户输入
@@ -3153,7 +3298,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         self.text_box.setWindowFlags(Qt.Widget)
                         
                         # 清除透明背景属性（如果之前设置过）
-                        self.text_box.setAttribute(Qt.WA_TranslucentBackground, False)
+                        self.text_box.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
                         # 截图模式使用完全透明背景，只显示文字
                         color = self.pencolor
                         self.text_box.setStyleSheet(f"""
@@ -3195,7 +3340,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     tool_label = "荧光笔" if self.painter_tools['highlight_on'] else "画笔"
                     
                     # 检测Shift键状态并初始化绘制
-                    shift_pressed = event.modifiers() & Qt.ShiftModifier
+                    shift_pressed = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                     if shift_pressed:
                         # 开始直线模式，但不立即确定方向
                         print(f"主窗口鼠标按下调试: 开始{tool_label}直线模式，起始点 [{press_x}, {press_y}]")
@@ -3246,7 +3391,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                         y0 + 8 < event.y() < y1 - 8) and not self.finding_rect:
                     # if not self.finding_rect:
                     self.move_rect = True
-                    self.setCursor(Qt.SizeAllCursor)
+                    self.setCursor(Qt.CursorShape.SizeAllCursor)
                     self.bx = abs(max(self.x1, self.x0) - event.x())
                     self.by = abs(max(self.y1, self.y0) - event.y())
                 else:
@@ -3291,7 +3436,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             if not hasattr(event, '_from_pinned_window'):
                 return  # 如果不是委托事件，直接返回
         
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             # ------------------------------------------------------------------
             # 0. 优先处理：旋转与缩放结束
             # ------------------------------------------------------------------
@@ -3533,7 +3678,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                     else:
                         print(f"撤销系统: 跳过备份，无有效绘制内容")
             else:  # 调整选区松开
-                self.setCursor(Qt.ArrowCursor)
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             self.NpainterNmoveFlag = False  # 选区结束标志置零
             self.move_rect = self.move_y0 = self.move_x0 = self.move_x1 = self.move_y1 = False
             
@@ -3552,7 +3697,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             # else: 已有选区，保持工具栏状态不变
             # self.sure_btn.show()
             
-        elif event.button() == Qt.RightButton:  # 右键 - 统一行为：直接退出截图
+        elif event.button() == Qt.MouseButton.RightButton:  # 右键 - 统一行为：直接退出截图
             try:
                 if not QSettings('Fandes', 'jietuba').value("S_SIMPLE_MODE", False, bool):
                     # 检查主窗口截图前的可见状态，只有原本可见才显示
@@ -3778,11 +3923,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 if self._is_brush_tool_active():
                     self.setCursor(QCursor(QPixmap(":/pen.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
                 elif self.painter_tools['drawrect_bs_on']:
-                    self.setCursor(Qt.ArrowCursor)  # 明确设置为默认箭头鼠标
+                    self.setCursor(Qt.CursorShape.ArrowCursor)  # 明确设置为默认箭头鼠标
                 elif self.painter_tools['drawarrow_on']:
                     self.setCursor(QCursor(QPixmap(":/arrowicon.png").scaled(32, 32, Qt.KeepAspectRatio), 0, 32))
                 elif self.painter_tools['drawcircle_on']:
-                    self.setCursor(Qt.ArrowCursor)  # 明确设置为默认箭头鼠标
+                    self.setCursor(Qt.CursorShape.ArrowCursor)  # 明确设置为默认箭头鼠标
                 elif self.painter_tools['drawtext_on']:
                     self.setCursor(QCursor(QPixmap(":/texticon.png").scaled(16, 16, Qt.KeepAspectRatio), 0, 0))
 
@@ -3795,47 +3940,47 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 mx = (maxx + minx) // 2  # 取中间值
                 if ((minx - 8 < event.x() < minx + 8) and (miny - 8 < event.y() < miny + 8)) or \
                         ((maxx - 8 < event.x() < maxx + 8) and (maxy - 8 < event.y() < maxy + 8)):
-                    self.setCursor(Qt.SizeFDiagCursor)
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
                 elif ((minx - 8 < event.x() < minx + 8) and (maxy - 8 < event.y() < maxy + 8)) or \
                         ((maxx - 8 < event.x() < maxx + 8) and (miny - 8 < event.y() < miny + 8)):
-                    self.setCursor(Qt.SizeBDiagCursor)
+                    self.setCursor(Qt.CursorShape.SizeBDiagCursor)
                 elif (self.x0 - 8 < event.x() < self.x0 + 8) and (
                         my - 8 < event.y() < my + 8 or miny - 8 < event.y() < miny + 8 or maxy - 8 < event.y() < maxy + 8):
-                    self.setCursor(Qt.SizeHorCursor)
+                    self.setCursor(Qt.CursorShape.SizeHorCursor)
                 elif (self.x1 - 8 < event.x() < self.x1 + 8) and (
                         my - 8 < event.y() < my + 8 or miny - 8 < event.y() < miny + 8 or maxy - 8 < event.y() < maxy + 8):
-                    self.setCursor(Qt.SizeHorCursor)
+                    self.setCursor(Qt.CursorShape.SizeHorCursor)
                 elif (self.y0 - 8 < event.y() < self.y0 + 8) and (
                         mx - 8 < event.x() < mx + 8 or minx - 8 < event.x() < minx + 8 or maxx - 8 < event.x() < maxx + 8):
-                    self.setCursor(Qt.SizeVerCursor)
+                    self.setCursor(Qt.CursorShape.SizeVerCursor)
                 elif (self.y1 - 8 < event.y() < self.y1 + 8) and (
                         mx - 8 < event.x() < mx + 8 or minx - 8 < event.x() < minx + 8 or maxx - 8 < event.x() < maxx + 8):
-                    self.setCursor(Qt.SizeVerCursor)
+                    self.setCursor(Qt.CursorShape.SizeVerCursor)
                 elif (minx + 8 < event.x() < maxx - 8) and (
                         miny + 8 < event.y() < maxy - 8):
                     if self.move_rect:
-                        self.setCursor(Qt.SizeAllCursor)
-                    # self.setCursor(Qt.SizeAllCursor)
+                        self.setCursor(Qt.CursorShape.SizeAllCursor)
+                    # self.setCursor(Qt.CursorShape.SizeAllCursor)
                 elif self.move_x1 or self.move_x0 or self.move_y1 or self.move_y0:  # 再次判断防止光标抖动
                     b = (self.x1 - self.x0) * (self.y1 - self.y0) > 0
                     if (self.move_x0 and self.move_y0) or (self.move_x1 and self.move_y1):
                         if b:
-                            self.setCursor(Qt.SizeFDiagCursor)
+                            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
                         else:
-                            self.setCursor(Qt.SizeBDiagCursor)
+                            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
                     elif (self.move_x1 and self.move_y0) or (self.move_x0 and self.move_y1):
                         if b:
-                            self.setCursor(Qt.SizeBDiagCursor)
+                            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
                         else:
-                            self.setCursor(Qt.SizeFDiagCursor)
+                            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
                     elif (self.move_x0 or self.move_x1) and not (self.move_y0 or self.move_y1):
-                        self.setCursor(Qt.SizeHorCursor)
+                        self.setCursor(Qt.CursorShape.SizeHorCursor)
                     elif not (self.move_x0 or self.move_x1) and (self.move_y0 or self.move_y1):
-                        self.setCursor(Qt.SizeVerCursor)
+                        self.setCursor(Qt.CursorShape.SizeVerCursor)
                     # elif self.move_rect:
-                    #     self.setCursor(Qt.SizeAllCursor)
+                    #     self.setCursor(Qt.CursorShape.SizeAllCursor)
                 else:
-                    self.setCursor(Qt.ArrowCursor)
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
                 
                 # === 选区创建逻辑 ===
                 # 1. 智能选区模式：检测拖动并切换到手动模式
@@ -3884,9 +4029,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
     def keyPressEvent(self, e):  # 按键按下,没按一个键触发一次
         super(Slabel, self).keyPressEvent(e)
         # self.pixmap().save(temp_path + '/aslfdhds.png')
-        if e.key() == Qt.Key_Escape:  # 退出
+        if e.key() == Qt.Key.Key_Escape:  # 退出
             self.clear_and_hide()
-        elif e.key() in (Qt.Key_Return, Qt.Key_Enter):  # Enter键完成截图
+        elif e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):  # Enter键完成截图
             # 检查是否有任何绘制工具激活，如果有则不响应Enter键
             if hasattr(self, 'painter_tools') and any(self.painter_tools.values()):
                 # 有绘制工具激活时，Enter键可能用于文字输入等，不执行完成操作
@@ -3906,25 +4051,25 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
                 self.handle_sure_btn_click()
             else:
                 print("⚠️ [Enter键] 未选择截图区域，忽略Enter键")
-        elif e.key() == Qt.Key_Control:  # 按住ctrl,更改透明度标志位置一
+        elif e.key() == Qt.Key.Key_Control:  # 按住ctrl,更改透明度标志位置一
             print("cahnge")
             self.change_alpha = True
 
         elif self.change_alpha:  # 如果已经按下了ctrl
-            if e.key() == Qt.Key_S:  # 还按下了s,说明是保存,ctrl+s
+            if e.key() == Qt.Key.Key_S:  # 还按下了s,说明是保存,ctrl+s
                 # 在保存前，先保存当前的绘制状态（如果有正在输入的文字）
                 print("💾 [Ctrl+S] 执行保存前，保存当前绘制状态")
                 self._reset_text_box_completely()
                 self.cutpic(1)
             else:
-                if e.key() == Qt.Key_Z:  # 前一步
+                if e.key() == Qt.Key.Key_Z:  # 前一步
                     self.last_step()
-                elif e.key() == Qt.Key_Y:  # 后一步
+                elif e.key() == Qt.Key.Key_Y:  # 后一步
                     self.next_step()
 
     def keyReleaseEvent(self, e) -> None:  # 按键松开
         super(Slabel, self).keyReleaseEvent(e)
-        if e.key() == Qt.Key_Control:
+        if e.key() == Qt.Key.Key_Control:
             self.change_alpha = False
 
     def clear_and_hide(self):  # 清理退出
@@ -4055,11 +4200,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         painter.save()
         
         # 设置绘画参数
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # 绘制画笔轨迹
         if self.pen_pointlist:
-            pen = QPen(self.pencolor, self.tool_width, Qt.SolidLine)
+            pen = QPen(self.pencolor, self.tool_width, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             for i in range(len(self.pen_pointlist) - 1):
                 if self.pen_pointlist[i] != [-2, -2] and self.pen_pointlist[i + 1] != [-2, -2]:
@@ -4068,7 +4213,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
         # 绘制矩形
         if self.drawrect_pointlist[2] == 1:
-            pen = QPen(self.pencolor, self.tool_width, Qt.SolidLine)
+            pen = QPen(self.pencolor, self.tool_width, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             painter.drawRect(self.drawrect_pointlist[0][0], self.drawrect_pointlist[0][1],
                            self.drawrect_pointlist[1][0] - self.drawrect_pointlist[0][0],
@@ -4076,7 +4221,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
         # 绘制箭头
         if self.drawarrow_pointlist[2] == 1:
-            pen = QPen(self.pencolor, self.tool_width, Qt.SolidLine)
+            pen = QPen(self.pencolor, self.tool_width, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             # 绘制箭头的直线部分
             painter.drawLine(self.drawarrow_pointlist[0][0], self.drawarrow_pointlist[0][1],
@@ -4090,7 +4235,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
             circle_radius = max(20, self.tool_width * 1.5)
             
             # 绘制圆形背景（使用当前透明度设置）
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             bg_color = QColor(self.pencolor)
             bg_color.setAlpha(self.alpha)  # 使用透明度滑块的值
             painter.setBrush(bg_color)
@@ -4113,7 +4258,7 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
 
         # 绘制圆形（使用矩形边界框算法，与 jietuba_drawing.py 保持一致）
         if self.drawcircle_pointlist[2] == 1:
-            pen = QPen(self.pencolor, self.tool_width, Qt.SolidLine)
+            pen = QPen(self.pencolor, self.tool_width, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             poitlist = self.drawcircle_pointlist
             painter.drawEllipse(min(poitlist[0][0], poitlist[1][0]), min(poitlist[0][1], poitlist[1][1]),
@@ -4154,11 +4299,11 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         painter.save()
         painter.setTransform(transform, True)
         # Use the same style as the creation preview (Red/Orange)
-        # The user mentioned "orange box", which likely refers to the red preview box (Qt.red)
-        # We will use Qt.red to match the existing style
-        pen = QPen(Qt.red, 1, Qt.DashLine) 
+        # The user mentioned "orange box", which likely refers to the red preview box (Qt.GlobalColor.red)
+        # We will use Qt.GlobalColor.red to match the existing style
+        pen = QPen(Qt.GlobalColor.red, 1, Qt.PenStyle.DashLine) 
         painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(rect)
         painter.restore()
         
@@ -4168,8 +4313,8 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         ]
         transformed_corners = [transform.map(p) for p in corners]
         
-        painter.setPen(QPen(Qt.red, 1))
-        painter.setBrush(Qt.white)
+        painter.setPen(QPen(Qt.GlobalColor.red, 1))
+        painter.setBrush(Qt.GlobalColor.white)
         handle_size = 8
         for p in transformed_corners:
             painter.drawRect(int(p.x() - handle_size/2), int(p.y() - handle_size/2), handle_size, handle_size)
@@ -4181,9 +4326,9 @@ class Slabel(ToolbarManager, QLabel):  # 区域截图功能
         p1 = transform.map(top_center)
         p2 = transform.map(rotation_handle_pos)
         
-        painter.setPen(QPen(Qt.red, 1))
+        painter.setPen(QPen(Qt.GlobalColor.red, 1))
         painter.drawLine(p1, p2)
-        painter.setBrush(Qt.green)
+        painter.setBrush(Qt.GlobalColor.green)
         painter.drawEllipse(p2, 4, 4)
 
     def paintEvent(self, event):  # 绘图函数,每次调用self.update时触发
@@ -4240,7 +4385,7 @@ if __name__ == '__main__':
         def ss(self):  # 截屏开始
             self.setWindowOpacity(0)  # 设置透明度而不是hide是因为透明度更快
             self.temppos = [self.x(), self.y()]
-            self.move(QApplication.desktop().width(), QApplication.desktop().height())
+            self.move(QApplication.primaryScreen().geometry().width(), QApplication.primaryScreen().geometry().height())
             self.s.screen_shot()
             # self.hide()
 
@@ -4283,4 +4428,4 @@ if __name__ == '__main__':
     
     s = testwin()
     s.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

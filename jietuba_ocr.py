@@ -14,8 +14,8 @@ jietuba_ocr.py - OCR 功能模块
 依赖:
 - pip install rapidocr onnxruntime
 """
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import QBuffer, QIODevice, Qt
+from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import QBuffer, QIODevice, Qt
 from typing import Optional, Dict, Any
 import io
 

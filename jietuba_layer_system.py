@@ -16,8 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from PyQt5.QtCore import QPointF, QSize, Qt, QRectF
-from PyQt5.QtGui import (QColor, QFont, QPainter, QPen,
+from PyQt6.QtCore import QPointF, QSize, Qt, QRectF
+from PyQt6.QtGui import (QColor, QFont, QPainter, QPen,
 					 QPixmap, QTransform)
 
 
@@ -529,7 +529,7 @@ class VectorLayerDocument:
 		overlay = QPixmap(target_w, target_h)
 		overlay.fill(Qt.transparent)
 		painter = QPainter(overlay)
-		painter.setRenderHint(QPainter.Antialiasing)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
 		for cmd in self.commands:
 			if blend_filter and cmd.blend not in blend_filter:
@@ -547,7 +547,7 @@ class VectorLayerDocument:
 		target_w = base.width()
 		target_h = base.height()
 		painter = QPainter(base)
-		painter.setRenderHint(QPainter.Antialiasing)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
 		normal = self.render_overlay(QSize(target_w, target_h), blend_filter=("normal",))
 		painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
@@ -630,7 +630,7 @@ class VectorLayerDocument:
 				pen = QPen(color)
 				pen.setWidthF(self._pen_width(cmd, width, height))
 				painter.setPen(pen)
-				painter.setBrush(Qt.NoBrush)
+				painter.setBrush(Qt.BrushStyle.NoBrush)
 				if cmd.kind == "rect":
 					painter.drawRect(left, top, w, h)
 				else:
@@ -690,7 +690,7 @@ class VectorLayerDocument:
 				circle_radius = self._pen_width(cmd, width, height)
 				
 				# 绘制圆形背景
-				painter.setPen(Qt.NoPen)
+				painter.setPen(Qt.PenStyle.NoPen)
 				painter.setBrush(bg_color)
 				painter.drawEllipse(center, circle_radius, circle_radius)
 				
@@ -744,8 +744,8 @@ class StrokeStampRenderer:
 				for ix, iy in StrokeStampRenderer._interpolate(last_point, (x, y)):
 					StrokeStampRenderer._stamp(painter, ix, iy, half, stroke_width, color, brush_kind)
 			last_point = (x, y)
-		painter.setBrush(Qt.NoBrush)
-		painter.setPen(Qt.NoPen)
+		painter.setBrush(Qt.BrushStyle.NoBrush)
+		painter.setPen(Qt.PenStyle.NoPen)
 
 	@staticmethod
 	def _normalize_brush(value) -> str:
@@ -779,7 +779,7 @@ class StrokeStampRenderer:
 		if brush_kind == "square":
 			painter.fillRect(rect, color)
 		else:
-			painter.setPen(Qt.NoPen)
+			painter.setPen(Qt.PenStyle.NoPen)
 			painter.setBrush(color)
 			painter.drawEllipse(rect)
 

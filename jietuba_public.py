@@ -35,9 +35,9 @@ jietuba_public.py - 公共配置和工具函数模块
 import os
 import sys
 import time
-from PyQt5.QtCore import QRect, Qt, QThread, pyqtSignal, QTimer, QSettings
-from PyQt5.QtGui import QColor, QBrush, QPixmap, QPainter, QPen, QFont
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
+from PyQt6.QtCore import QRect, Qt, QThread, pyqtSignal, QTimer, QSettings
+from PyQt6.QtGui import QColor, QBrush, QPixmap, QPainter, QPen, QFont
+from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 
 def resource_path(relative_path):
@@ -85,7 +85,7 @@ def get_apppath():
 def get_screenshot_save_dir():
     """获取截图保存目录 - 支持从配置读取自定义路径"""
     try:
-        from PyQt5.QtCore import QSettings
+        from PyQt6.QtCore import QSettings
         settings = QSettings('Fandes', 'jietuba')
         
         # 从配置读取保存路径
@@ -114,9 +114,9 @@ class TipsShower(QLabel):
         self.timeout = timeout
         self.rfont = QFont('', fontsize)
         self.setFont(self.rfont)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.hide)
         self.setText(text)
@@ -131,7 +131,7 @@ class TipsShower(QLabel):
         print("settext")
         self.adjustSize()
         x, y, w, h = self.area
-        if x < QApplication.desktop().width() - x - w:
+        if x < QApplication.primaryScreen().geometry().width() - x - w:
             self.move(x + w + 5, y)
         else:
             self.move(x - self.width() - 5, y)
@@ -173,8 +173,8 @@ class linelabel(QLabel):
         super(linelabel, self).__init__(parent=parent)
         self.setMouseTracking(True)
         self.moving = False
-        # self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        # self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet("QPushButton{color:black}"
                            "QPushButton:hover{color:green}"
                            "QPushButton:hover{background-color:rgb(200,200,100)}"
@@ -192,16 +192,16 @@ class linelabel(QLabel):
         
     def mouseReleaseEvent(self, e):
         super().mouseReleaseEvent(e)
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             self.moving = False
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
     def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             self.moving = True
             self.dx = e.x()
             self.dy = e.y()
-            self.setCursor(Qt.SizeAllCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
             self.update()
 
     def mouseMoveEvent(self, e):
@@ -212,19 +212,19 @@ class linelabel(QLabel):
                 self.update()
                 self.move_signal.emit(self.x(),self.y())
 
-            self.setCursor(Qt.SizeAllCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
 
                 
 class Transparent_windows(QLabel):
-    def __init__(self, x=0, y=0, w=0, h=0, color=Qt.red, havelabel=False):
+    def __init__(self, x=0, y=0, w=0, h=0, color=Qt.GlobalColor.red, havelabel=False):
         super().__init__()
         self.setGeometry(x - 5, y - 5, w + 10, h + 10)
         self.area = (x, y, w, h)
         self.x, self.y, self.w, self.h = x, y, w, h
         self.color = color
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         if havelabel:
             self.label = QLabel(self)
             self.label.setGeometry(self.w - 55, 6 + self.h + 1, 60, 14)
@@ -238,7 +238,7 @@ class Transparent_windows(QLabel):
         super().paintEvent(e)
         x, y, w, h = self.area
         p = QPainter(self)
-        p.setPen(QPen(self.color, 2, Qt.SolidLine))
+        p.setPen(QPen(self.color, 2, Qt.PenStyle.SolidLine))
         p.drawRect(QRect(3, 3, w + 4, h + 4))
         p.end()
 
